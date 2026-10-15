@@ -1,0 +1,646 @@
+# Banana — AI-Assisted Weekly Meal Planner
+
+Banana is a private, local-first Android app that plans your next week of
+meals, tells you what to buy, and spends your food budget where the deals are.
+Its defining interaction is a **week**: you set how much time you have on each
+day and anything you specifically want to eat, and Banana proposes a plan that
+fits both, then turns it into one organised shopping list.
+
+It is the sibling of **Coconut** (`../Coconut`, a budget app) and **Cherry**
+(`../PassionFruit`, a coffee journal). All three share a family: the same
+Material Design 3 foundation, the same architecture, the same offline-first
+discipline, the same screen density, and the same habit of turning a vague
+intention into a deliberate, judged plan. Banana is what happens when that
+design philosophy is pointed at what you eat.
+
+Read `AGENTS.md` for how to build it. Read `theme.md` for how it looks. This
+document defines what it is.
+
+---
+
+## 1. Purpose
+
+Banana solves one problem: deciding what to cook and then buying exactly the
+right things is repetitive, thankless work, so it is usually done badly — the
+same five meals, whatever is on the shelf, and a mid-week trip for the one
+ingredient you forgot.
+
+The app exists to answer three questions well, every week:
+
+1. **What should we eat?** A plan that respects your time, your tastes, your
+   diet, and your budget.
+2. **What do we need to buy?** One shopping list, grouped, de-duplicated, and
+   aware of what you already have.
+3. **Where is the best value?** Deals at Lidl, Hofer and Spar, matched to the
+   things the plan actually calls for.
+
+The loop is:
+
+```
+set the week  ->  plan meals  ->  shop  ->  cook  ->  rate  ->  learn  ->  plan
+```
+
+Every feature either shortens the distance from "it is Sunday evening" to "here
+is the shopping list", or it increases the quality of the next plan. Anything
+that does neither is a non-goal.
+
+The app is a **personal tool**, not a restaurant POS, not a nutritionist, not a
+delivery service, and not a social network. One user, one device, one local
+database.
+
+---
+
+## 2. Design Lineage: Coconut and Cherry
+
+Banana, Cherry and Coconut are one family. Banana shares the most with Cherry,
+because Cherry already solved the problem of an AI call whose output is a
+*candidate the user confirms*, never a write.
+
+### 2.1 What is shared
+
+- **Material Design 3** foundation and the same `buildTheme` / token
+  construction (`theme.md` §2, §6).
+- The same spacing, radii, elevation, typography and chart-token shapes.
+- The same `ThemeMode` / `ThemePreference` (`light` | `dark` | `system`)
+  mechanism.
+- The same **offline-first** discipline: local SQLite is the single source of
+  truth; the app works fully without any network.
+- The same architecture: Expo Router file-based routing, `src/database/` for
+  all SQL, `src/services/` for pure logic, `src/ai/` for the only permitted
+  AI transport, `src/data/DataProvider.tsx` owning app state.
+- The same component vocabulary: `ScreenFade`, `KeyboardAwareScrollView`,
+  `StatCard`, `AppDialog`, `EmptyState`, `FadeIn`, `AnimatedNumber`,
+  `LoadingScreen`, `NumberField`, `OptionField`, `ScreenToast`,
+  `CustomTabBar`.
+- The same documentation convention: this file, `AGENTS.md`, `theme.md`,
+  `README.md`, `release-plan.md`.
+- The same **numbered-migration** schema discipline and the same repository
+  API shape (`getX`, `getAllX`, `createX(input)`, `updateX`, `setXField`,
+  `deleteX`, `upsertX`, `reorderX`).
+- The same rule that the LLM **never writes to the database**. It returns
+  candidates; the user and the service layer dispose.
+
+### 2.2 What is deliberately different
+
+- **Colour.** Coconut is shell brown, sage and dusty blue on warm cream. Cherry
+  is coffee-brown and coffee-cherry red on oat-beige. Banana is ripe-banana
+  gold and leaf-green on a fresh ivory paper, with a cool teal and a rum-amber
+  as the third and fourth brand scales (`theme.md` §4, §5).
+- **The unit of the app is a week, not a month and not a brew.** Coconut closes
+  a month; Cherry records a brew; Banana plans a week and shops for it.
+- **The fifth tab is Shopping, and the fourth is Deals.** The tabs are Plan,
+  Recipes, Shopping, Deals, Settings.
+- **Network is used for two things, and only two.** The first is the
+  user-configured AI provider (`src/ai/`). The second is the **deal scraper**
+  (`src/deals/`), which fetches current offers from retailer websites. This is
+  a knowing, additional, and bounded exception to Coconut's and Cherry's
+  "the only network call is the AI provider" rule — see §9. It is still
+  local-first: every scraped deal is cached in SQLite, and the app works fully
+  from the last snapshot with no network at all.
+- **There is a pantry.** Cherry tracks remaining bean weight; Banana tracks what
+  is already in the house, because that is what removes items from a shopping
+  list.
+- **Money is real, and central.** Prices, deals and an optional weekly budget
+  are first-class. Money is stored as integer cents, exactly as in Coconut.
+
+### 2.3 What is borrowed as an idea, not as code
+
+Cherry's **Plan → Brew → Taste** lifecycle becomes Banana's
+**Plan → Shop → Cook → Rate** lifecycle. Cherry's `extraction_runs` audit table
+becomes Banana's `ai_runs`. Coconut's "the month is planned, judged and closed"
+becomes "the week is planned, shopped and cooked". Coconut's integer-cents rule
+is adopted wholesale.
+
+---
+
+## 3. The Core Model: A Week Has a Lifecycle
+
+Coconut's strongest design decision is that a month is planned, judged and
+closed — it does not simply pass. Banana applies the same idea to a week.
+
+```
+  SET UP            PLAN              SHOP             COOK            RATE
+  budget            slots + meals     list              done marks      ratings
+  time per day  ->  (deal-aware)  -> grouped,     ->  which meals -> verdicts
+  do-not-want        proposals         de-duped,         were cooked     feed the
+  want-to-eat                                            and leftovers   next plan
+```
+
+### 3.1 The Week
+
+A **Week** is a committed intention for a seven-day span (Monday to Sunday by
+default, configurable start day). It carries:
+
+- `start_date` and `end_date`;
+- a per-day **time budget** (§3.2);
+- the chosen **slot layout** (how many meals a day you plan — dinner only by
+  default, optionally lunch and breakfast);
+- an optional weekly **food budget** in cents;
+- a `status`: `draft`, `planned`, `shopping`, `cooking`, `done`.
+
+A Week is not a meal. It is the container. Creating a Week is always a
+deliberate act.
+
+### 3.2 Time budgets
+
+For each day the user sets a **time budget**: the number of minutes available
+to cook, or one of two sentinels:
+
+- `no_cook` — you are not cooking that day (takeaway, a restaurant, a fast);
+- `leftovers` — you intend to eat the previous day's leftovers.
+
+`leftovers` is a first-class budget, not a note, because it is the single
+biggest lever on both cost and time: it tells the planner to *cook once, eat
+twice*. A plan that uses a `leftovers` day to earn a `cook once` is a good
+plan.
+
+The default is `45` minutes on every day, so a Week exists the moment it is
+created and can be refined later.
+
+### 3.3 Slots
+
+A **slot** is one meal place: a day plus a meal type (`breakfast`, `lunch`,
+`dinner`, `snack`). A slot holds either:
+
+- a **recipe** chosen from the catalogue,
+- a **free text** meal ("leftover curry", "at Mum's"),
+- a reference to a **leftovers** budget, or
+- nothing (unfilled).
+
+Only `dinner` slots exist until the user enables more. An unfilled slot is a
+legitimate, visible state — the app shows gaps rather than inventing meals.
+
+### 3.4 Cook, rate, learn
+
+A slot is marked **cooked** when the meal is made. Marking a slot cooked can
+roll the surplus into a designated `leftovers` slot the next day, which is how
+"cook once, eat twice" is recorded rather than merely hoped for.
+
+After cooking, a meal is **rated**: `liked` / `disliked` / `unsure`, plus an
+optional 1–5 overall rating. Ratings are the learning signal. A disliked
+recipe is deprecated for that household; a liked one is promoted.
+
+---
+
+## 4. Recipes and Ingredients
+
+### 4.1 The recipe
+
+A **recipe** is a reusable meal. It carries:
+
+- `name`, `description`, `servings`;
+- `prep_minutes`, `cook_minutes` (derived `total_minutes` is never stored);
+- `effort` — `quick` / `normal` / `involved`, one coarse knob the planner uses
+  before it reads minutes;
+- `cuisine` (free text or a seeded list), `tags` (free-form: `comfort`,
+  `one-pan`, `batch`, `spicy` …);
+- `source` — `own`, `builtin`, `ai`;
+- `rating` (derived from history, never stored — §13.3);
+- `is_favourite`, `is_deprecated`;
+- an ordered list of **recipe ingredients**;
+- an ordered list of **steps**;
+- `uuid` and `updated_at` from migration 1.
+
+### 4.2 Ingredients
+
+An **ingredient** is a canonical pantry item, not a string on a recipe. It
+carries a `name`, a `category` (an aisle: `produce`, `meat`, `dairy`, `bakery`,
+`dry_goods`, `frozen`, `drinks`, `household`, `other`), a default `unit`, a
+`is_staple` flag (salt, oil, flour), and any number of **aliases** ("spring
+onion" ≈ "scallion" ≈ "Frühlingszwiebel").
+
+Recipes reference ingredients by id and give the quantity as `quantity` (REAL)
+plus a `unit` (`g`, `kg`, `ml`, `l`, `piece`, `tbsp`, `tsp`, `pinch`,
+`to_taste`). A recipe ingredient may be marked `optional`, which keeps it off
+the shopping list by default.
+
+### 4.3 Pantry
+
+The **pantry** records what is already at home: an ingredient, an optional
+amount, and a rough confidence (`stocked` / `low` / `out`). A pantry item that
+is `stocked` is removed from the shopping list; `low` keeps it on the list
+with a marker; `out` or absent means buy it.
+
+The pantry is deliberately rough. It is not an inventory system; it is a
+one-tap "we have this".
+
+### 4.4 Preferences, diet and allergies
+
+A single **preferences** record holds:
+
+- `diet` — `omnivore` / `vegetarian` / `vegan` / `pescatarian`;
+- `allergies` — a hard list of ingredient ids that must never appear;
+- `dislikes` — a soft list, penalised but not forbidden;
+- `default_servings`;
+- `max_minutes_weeknight` — the ceiling the planner respects on school nights;
+- `weekly_budget_cents` (optional);
+- `household_name` (cosmetic).
+
+**Allergies are absolute and are enforced in the service layer, not by the
+LLM.** A recipe containing an allergen is filtered out before it is ever
+offered, whatever the AI proposes.
+
+---
+
+## 5. Stores and Deals
+
+### 5.1 Stores
+
+A **store** is one of the supported retailers — seeded as **Lidl**, **Hofer**
+( Aldi Süd in Austria) and **Spar** — each with a `slug`, a display name, a
+base URL, and an `enabled` flag. The user can enable or disable a store, but
+adding arbitrary stores is out of scope for v1.
+
+### 5.2 Deals
+
+A **deal** is one product on offer at one store for a validity window:
+
+- `store_id`, `product_name`, `category` (the aisle it maps to, best-effort);
+- `price_cents`, optional `was_price_cents`, optional `unit` and `quantity_text`
+  ("1 kg", "500 g", "per piece");
+- `valid_from`, `valid_to` (dates);
+- `source_url`, `scraped_at`;
+- `raw_text` — the line as the store published it, always kept so a bad parse
+  is auditable.
+
+Deals are shown in the Deals tab, grouped by store, sorted by validity and by
+how much they touch the current plan.
+
+### 5.3 Matching deals to ingredients
+
+A **deal match** links a scraped deal product to a canonical ingredient, using
+ingredient aliases and a normalised fuzzy match (never a naive substring). A
+match has a `confidence` and is always **reviewable and correctable** by the
+user: a wrong match is one tap to reject, and a rejected match is remembered.
+
+A deal is **relevant** when its ingredient appears in the current plan or the
+current shopping list. Relevance, not raw discount, is what the app surfaces:
+"the plan calls for chicken; chicken is 30% off at Hofer this week."
+
+### 5.4 The scraping boundary (see §9)
+
+Scraping lives entirely in `src/deals/`, behind a `DealsProvider` interface
+with one implementation per store plus a cache. It is:
+
+- **best-effort** — a failed scrape never blocks the app and never destroys
+  data; the previous snapshot simply persists;
+- **cached** — every successful scrape is written to `deals` with its
+  `scraped_at`, and the app reads from SQLite, never from the network, when
+  rendering;
+- **polite** — one request per store per refresh, an explicit `User-Agent`,
+  a timeout, and a stale-after window (default 12 hours) so it is not hammered;
+- **isolated** — parsers are pure functions `(html, store) => ParsedDeal[]`
+  and are unit-tested against saved HTML fixtures, so the network never
+  appears in a test.
+
+---
+
+## 6. The Shopping List
+
+The shopping list is **derived, never stored as a hand-edited document** — with
+one exception for items the user adds manually. It is computed from:
+
+```
+  sum of all recipe ingredients in the week's filled slots
+    − pantry items marked stocked
+    − recipe ingredients marked optional (unless explicitly wanted)
+    + manually added items
+```
+
+Concretely it:
+
+1. **Aggregates** the same ingredient across recipes, converting units where it
+   can and listing unconvertible ones separately rather than guessing.
+2. **Groups** by store aisle/category, and orders the aisles in a sensible
+   walking order.
+3. **Annotates** each line with the best current deal for that ingredient
+   across enabled stores, with the store name and the saving.
+4. **Estimates** a total cost from deal prices where known and a fallback
+   average where not, and compares it to the weekly budget (§3.1).
+5. **Ticks off** as you shop; a ticked item can be added to the pantry in one
+   tap ("I bought this, we now have it").
+
+The list is one screen, one scroll, grouped headers, and a sticky total.
+
+---
+
+## 7. The AI Planner
+
+AI is optional and entirely the user's: bring your own OpenAI-compatible
+provider, base URL, key and model. It is the same transport as Cherry's
+(`src/ai/provider.ts` → `openai-compatible.ts`).
+
+The AI does **three** jobs, and never a fourth:
+
+1. **Draft a plan.** Given the week's time budgets, preferences, allergies,
+   dislikes, budget, the recipe catalogue, the pantry and the current deals,
+   return a set of slot candidates: `{ day, meal_type, recipe_id | free_text,
+   servings, reason }`. It must choose only recipes it was given; it may not
+   invent a recipe, an ingredient id, or an allergen.
+2. **Fill a gap.** Given one unfilled slot and the same context, propose a
+   small set of candidate meals, each with a one-line reason.
+3. **Narrate.** Given a plan already produced by the deterministic planner
+   (§7.3), write a short, human rationale — "Tuesday is your long day, so it's
+   a 20-minute one; you'll cook double and eat it again on Wednesday."
+
+It never computes a deal match, never edits the shopping list, never overrides
+an allergy, and never writes to the database.
+
+### 6.1 Provider configuration
+
+Identical to Cherry: base URL, API key and model are entered in the in-app AI
+settings screen and stored only in the local `ai_state` singleton. They are
+never hardcoded, never logged, never committed, and excluded from backups.
+
+### 6.2 Structured output
+
+The planner returns strict JSON, parsed, validated and repaired by
+`src/ai/planner.ts` into candidates (`PlanCandidate[]`), exactly as Cherry's
+extraction returns candidates. A candidate is not a plan; the plan screen and
+the planning service dispose. Anything the model leaves uncertain goes into
+`low_confidence`.
+
+### 6.3 Degradation
+
+There is always a **deterministic planner** (§7.3) that needs no network. If
+the AI is unconfigured or unavailable, the deterministic planner still produces
+a complete, valid plan, and a template writes the narrative. The AI is an
+improvement, never a requirement.
+
+---
+
+## 7. Planning
+
+### 7.1 Inputs
+
+The planner receives: the week's days and their time budgets; the slot layout;
+the preferences (diet, allergies, dislikes, default servings, weeknight
+ceiling, budget); the recipe catalogue; the pantry; and the current deals.
+
+### 7.4 Hard constraints and soft preferences
+
+- **Hard** (never violated): allergies; `no_cook` and `leftovers` days; a day's
+  available minutes for a `quick`/`normal` meal; servings positive.
+- **Soft** (scored): using what is on offer; reusing ingredients across the
+  week to shrink the shopping list; not repeating a cuisine two days running;
+  honouring favourites; respecting dislikes; staying near the time budget
+  rather than merely under it; staying under budget.
+
+### 7.3 The deterministic planner
+
+`src/services/planning-service.ts` is a pure, deterministic function. Given the
+same week and the same catalogue it returns the same plan, so it is fully
+testable. It is greedy and explainable: for each day, from a scored shortlist,
+choose the meal that best fits the time budget and the remaining week, while
+maximising shared ingredients and deal coverage. It is the baseline that the AI
+may improve and the fallback that always exists.
+
+### 7.4 "Cook once, eat twice"
+
+The planner actively tries to turn one cook into two meals across adjacent
+days when a `leftovers` slot exists, because it is the biggest single saving on
+time and cost. This is a scored objective, not a hard rule.
+
+---
+
+## 7.5 AI planner, precisely
+
+The AI planner is invoked from the Plan screen's "Plan my week" action. It is
+given the deterministic plan as a starting point and asked to improve it,
+filling gaps and swapping for deals, within the constraints. Every change it
+proposes is shown as a diff against the deterministic plan, and accepted or
+rejected per change, never wholesale.
+
+---
+
+## 8. Main Screens
+
+Five tabs and a small set of stack screens.
+
+### Plan (home)
+
+The current week at a glance: a card per day showing its time budget, its
+meal(s) or a gap, and the leftovers link. The hero action is **Plan my week**
+(deterministic, with an optional "ask AI to improve it"). A header shows the
+week range, the estimated cost, and the budget bar. Below: this week's deals
+that touch the plan.
+
+### Recipes
+
+The cookbook: your own recipes, plus the built-in starter set. Search, filter
+by tag / cuisine / effort / max time, and sort by favourite and by rating.
+Tapping a recipe opens its detail: ingredients, steps, history, and "add to
+plan".
+
+### Shopping
+
+The derived list for the current week, grouped by aisle, ready to tick off.
+A pinned header shows the estimated total against budget and the number of
+deal matches. Manual items can be added. Buying a staple offers to update the
+pantry.
+
+### Deals
+
+Scraped offers, grouped by store and filterable by aisle and by "relevant to my
+plan". A refresh action triggers a scrape and shows the last-scraped time and
+per-store result. Wrong ingredient matches are correctable here.
+
+### Settings
+
+Appearance (light / dark / system), household and diet, allergies and dislikes,
+budget and default servings, week start day, stores on/off and scraping
+preferences, AI provider, backup and restore, about and What's new.
+
+### Stack screens
+
+`week/setup`, `slot/[id]`, `recipe/[id]`, `recipe/new`, `ingredient/[id]`,
+`deals/match/[id]`, `pantry`, `ai-provider`, `planner` (the AI review), `backup`,
+`tutorial`, `whats-new`, `about`.
+
+---
+
+## 9. Network, Privacy, and the Scraping Boundary
+
+This is the section where Banana differs from its siblings, and it must be
+honest about it.
+
+**Two, and only two, kinds of outbound request exist.**
+
+1. **The AI provider** (`src/ai/`) — the user's own base URL, key and model,
+   invoked only when the user taps an AI feature. Identical in spirit to Cherry.
+2. **The deal scraper** (`src/deals/`) — requests to the public web pages of
+   the enabled retailers, to read their current offers. These requests carry no
+   personal data, no identifiers and no account; they fetch a public page.
+
+Everything else is local. There is no Banana backend, no account, no analytics,
+no telemetry, no crash reporting, no advertising, and no third party.
+
+**Rules for the scraper, non-negotiable:**
+
+- It only ever fetches a store's public offers page. It does not log in, does
+  not submit forms, and does not follow the user anywhere.
+- It respects `robots.txt` for the target path, and gives up gracefully when
+  disallowed.
+- It makes at most one request per store per refresh, with a timeout and a
+  descriptive `User-Agent`, and never retries in a loop.
+- It writes only to the local `deals` cache. A failed scrape is inert.
+- It never sends the pantry, the plan, the budget, the user's location or any
+  personal data to a retailer.
+- Parsing is a pure function tested against fixtures; no test touches the
+  network.
+
+The user is responsible for how they use the app, and the app is designed to
+be a well-behaved citizen: read the public page, cache the public facts, stay
+quiet otherwise.
+
+---
+
+## 10. Notifications
+
+Local only, sensitive, and off by default except the first:
+
+1. **Plan the week** — a weekly nudge (default Sunday 17:00) when next week has
+   no plan.
+2. **Shop reminder** — when a week is `planned` and the shopping list is
+   unstarted the day before its first cook day.
+3. **Defrost / prep** — an optional reminder the evening before a slot whose
+   recipe carries a `prep_ahead` tag.
+
+---
+
+## 11. Backup and Restore
+
+Identical to Cherry and Coconut: export the whole SQLite file to a portable
+document, or restore from one. **The API key is stripped before a backup
+leaves the app.** Deals are transient and are exported too, but a restore never
+depends on them.
+
+---
+
+## 12. Technical Stack
+
+Mandatory, do not deviate without explicit user approval:
+
+- React Native via **Expo SDK**
+- **TypeScript** (strict mode)
+- **expo-sqlite** for local storage
+- **Expo Router** for navigation
+- **React Native Paper** (Material Design 3) for UI
+- **dayjs** for date handling
+- **expo-notifications** for local notifications
+- **expo-file-system** / **expo-sharing** for backup
+- **@expo/vector-icons** for all icons
+- **Jest** + jest-expo + @testing-library/react-native for tests
+- **react-native-web** + react-dom for the desktop/web build
+
+**No new dependency without explicit approval.** The scraper uses the platform
+`fetch` and string parsing; it does not add an HTML-parsing library in the
+foundation.
+
+Archive and compression (for backup) are not allowed; keep the backup a single
+SQLite file.
+
+---
+
+## 13. Data Model
+
+### 13.1 Table inventory
+
+Reference and configuration:
+
+```
+settings            key/value app settings
+ai_state            singleton AI provider configuration
+preferences         singleton household, diet, allergies, budget
+ingredients         canonical pantry items
+ingredient_aliases  alternative names per ingredient
+stores              seeded retailers (lidl, hofer, spar)
+```
+
+Catalogue:
+
+```
+recipes             reusable meals
+recipe_steps        ordered preparation steps
+recipe_ingredients  recipe -> ingredient with quantity and unit
+recipe_tags         free-form tags per recipe
+pantry              what is at home
+```
+
+Planning:
+
+```
+weeks               one planned week
+week_day_budgets    time budget per weekday of a week
+slots               one meal place in a week
+slot_events         audit trail of deliberate slot changes
+```
+
+Shopping:
+
+```
+shopping_items      manually added items only; the rest is derived (§6)
+```
+
+Deals and AI provenance:
+
+```
+deals               cached scraped offers
+deal_matches        deal -> ingredient matches with confidence
+scrape_runs         one audit row per scrape attempt per store
+ai_runs             one audit row per AI call
+```
+
+Every domain table carries `uuid TEXT` (UNIQUE) and `updated_at TEXT` from
+migration 1, as in Cherry.
+
+### 13.2 Conventions
+
+- SQLite tables `snake_case` plural; columns `snake_case`, no type prefix.
+- Money is `*_cents` INTEGER. Never a float.
+- Durations are `*_minutes` INTEGER. Ingredient quantities are REAL. Physical
+  measurements carry their unit in the column name (`quantity`, `unit`) or the
+  suffix (`_minutes`, `_cents`).
+- Dates are `TEXT` `YYYY-MM-DD`; timestamps are `TEXT` ISO-8601 with
+  milliseconds and `Z`.
+- Booleans are `INTEGER NOT NULL DEFAULT 0/1`.
+- Enums are `TEXT` with `CHECK (col IS NULL OR col IN (...))`.
+- Foreign keys: `ON DELETE CASCADE` for true children, `ON DELETE SET NULL` for
+  references that must survive.
+- One repository module per aggregate; a trailing `db?: SQLiteDatabase` on
+  every function so transactions reuse one handle.
+
+### 13.3 Derived, never stored
+
+Derived values are **never** columns. If you find yourself adding one, stop.
+The derived values include: a recipe's `total_minutes`, its `rating` and
+cook-count from history, a week's estimated cost, its budget variance, the
+shopping list itself, deal savings, and pantry sufficiency. They are computed
+in `src/services/` on demand.
+
+### 13.4 No sync in v1
+
+Coconut has optional Supabase sync and Shared Spaces. Banana does not in v1.
+The `uuid` columns keep the door open, exactly as Cherry's do.
+
+---
+
+## 14. Design Philosophy
+
+1. **Planning a week must be faster than not planning it**, or the app has
+   failed. The final state of a Sunday evening should be: open the app, glance,
+   tap once, have a plan.
+2. **A plan is a proposal, never a command.** Every AI or deterministic choice
+   can be changed, and every change is remembered.
+2. **The shopping list is the deliverable.** A plan you cannot shop for is a
+   wish. The list is one screen, one aisle order, one total.
+3. **Allergies are sacred.** The LLM never overrides them; a human can, per
+   item, but the default is absolute.
+4. **Nothing is invented.** Gaps are shown as gaps. A day with no cooking is a
+   valid day.
+4. **Cook once, eat twice** is the default aspiration wherever leftovers make
+   sense.
+5. **Spend where the plan wants it.** A deal is only interesting if the plan
+   needs it; deals do not drive the plan, they inform it.
+6. **The network is a guest.** It may read a public offers page; it may call the
+   user's own AI. It may do nothing else. Everything works offline.
