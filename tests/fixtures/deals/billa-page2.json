@@ -1,0 +1,18 @@
+{
+  "total": 3,
+  "results": [
+    {
+      "name": "Butter",
+      "brand": { "name": "Ja! Natürlich" },
+      "amount": "250",
+      "volumeLabelShort": "g",
+      "packageLabel": "Packung",
+      "price": {
+        "regular": { "value": 279 },
+        "crossed": 319,
+        "standard": { "value": 319 },
+        "baseUnitShort": "kg"
+      }
+    }
+  ]
+}

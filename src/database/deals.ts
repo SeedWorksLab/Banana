@@ -1,5 +1,5 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
-import type { Deal } from '../models';
+import type { Currency, Deal } from '../models';
 import { newUuid } from '../utils/uuid';
 import { getDatabase } from './database';
 
@@ -8,6 +8,7 @@ export interface DealInput {
   productName: string;
   brand: string | null;
   priceCents: number;
+  currency: Currency;
   referencePriceCents: number | null;
   unit: string | null;
   quantityText: string | null;
@@ -15,6 +16,7 @@ export interface DealInput {
   validTo: string | null;
   sourceUrl: string | null;
   scrapedAt: string;
+  rawText: string | null;
 }
 
 interface DealRow {
@@ -24,6 +26,7 @@ interface DealRow {
   product_name: string;
   brand: string | null;
   price_cents: number;
+  currency: Currency;
   reference_price_cents: number | null;
   unit: string | null;
   quantity_text: string | null;
@@ -31,6 +34,7 @@ interface DealRow {
   valid_to: string | null;
   source_url: string | null;
   scraped_at: string;
+  raw_text: string | null;
   created_at: string;
   updated_at: string | null;
   deleted: number;
@@ -44,6 +48,7 @@ function rowToDeal(row: DealRow): Deal {
     productName: row.product_name,
     brand: row.brand,
     priceCents: row.price_cents,
+    currency: row.currency,
     referencePriceCents: row.reference_price_cents,
     unit: row.unit,
     quantityText: row.quantity_text,
@@ -51,15 +56,16 @@ function rowToDeal(row: DealRow): Deal {
     validTo: row.valid_to,
     sourceUrl: row.source_url,
     scrapedAt: row.scraped_at,
+    rawText: row.raw_text,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deleted: row.deleted === 1,
   };
 }
 
-const SELECT = `SELECT id, uuid, store_id, product_name, brand, price_cents,
+const SELECT = `SELECT id, uuid, store_id, product_name, brand, price_cents, currency,
                        reference_price_cents, unit, quantity_text, valid_from, valid_to,
-                       source_url, scraped_at, created_at, updated_at, deleted
+                       source_url, scraped_at, raw_text, created_at, updated_at, deleted
                   FROM deals`;
 
 export async function getAllDeals(db?: SQLiteDatabase): Promise<Deal[]> {
@@ -107,15 +113,16 @@ export async function getDeal(id: number, db?: SQLiteDatabase): Promise<Deal | n
 async function insertDeal(database: SQLiteDatabase, input: DealInput): Promise<number> {
   const result = await database.runAsync(
     `INSERT INTO deals
-       (uuid, store_id, product_name, brand, price_cents, reference_price_cents, unit,
-        quantity_text, valid_from, valid_to, source_url, scraped_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (uuid, store_id, product_name, brand, price_cents, currency, reference_price_cents,
+        unit, quantity_text, valid_from, valid_to, source_url, scraped_at, raw_text)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       newUuid(),
       input.storeId,
       input.productName,
       input.brand,
       input.priceCents,
+      input.currency,
       input.referencePriceCents,
       input.unit,
       input.quantityText,
@@ -123,6 +130,7 @@ async function insertDeal(database: SQLiteDatabase, input: DealInput): Promise<n
       input.validTo,
       input.sourceUrl,
       input.scrapedAt,
+      input.rawText,
     ]
   );
   return result.lastInsertRowId;

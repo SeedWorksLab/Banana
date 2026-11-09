@@ -16,6 +16,7 @@ function deal(partial: Partial<DealLike>): DealLike {
     productName: partial.productName ?? 'Product',
     brand: partial.brand ?? null,
     priceCents: partial.priceCents ?? 100,
+    currency: partial.currency,
     referencePriceCents: partial.referencePriceCents === undefined ? null : partial.referencePriceCents,
     validFrom: partial.validFrom === undefined ? null : partial.validFrom,
     validTo: partial.validTo === undefined ? null : partial.validTo,
@@ -107,6 +108,16 @@ describe('bestDealForIngredient', () => {
       '2026-01-10'
     );
     expect(best?.deal.id).toBe(2);
+  });
+
+  it('filters to the requested currency when one is supplied', () => {
+    const deals = [
+      deal({ id: 1, storeId: 1, priceCents: 100, currency: 'HUF' }),
+      deal({ id: 2, storeId: 2, priceCents: 200, currency: 'EUR' }),
+    ];
+    const matches = [match({ dealId: 1, ingredientId: 7 }), match({ dealId: 2, ingredientId: 7 })];
+    expect(bestDealForIngredient(7, deals, matches, TODAY, 'EUR')?.deal.id).toBe(2);
+    expect(bestDealForIngredient(7, deals, matches, TODAY, 'HUF')?.deal.id).toBe(1);
   });
 
   it('breaks a remaining tie by store id for stability', () => {

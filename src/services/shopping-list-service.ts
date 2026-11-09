@@ -49,6 +49,31 @@ export interface ShoppingListInput {
   bestDeals?: ReadonlyMap<number, IngredientDeal>;
 }
 
+/**
+ * The order a shopper naturally walks a supermarket, so the list follows the
+ * aisles instead of the alphabet (idea.txt §6.2). Household goods are last
+ * because they are the furthest from the fresh departments.
+ */
+export const AISLE_ROUTE: readonly IngredientCategory[] = [
+  'produce',
+  'bakery',
+  'meat_fish',
+  'dairy',
+  'frozen',
+  'pantry',
+  'drinks',
+  'household',
+  'other',
+];
+
+const AISLE_INDEX = new Map<IngredientCategory, number>(
+  AISLE_ROUTE.map((category, index) => [category, index])
+);
+
+export function aisleOrder(category: IngredientCategory): number {
+  return AISLE_INDEX.get(category) ?? AISLE_ROUTE.length;
+}
+
 type Dimension = 'mass' | 'volume' | 'count';
 
 interface Accumulator {
@@ -150,8 +175,8 @@ export function buildShoppingList(input: ShoppingListInput): ShoppingList {
 
 export function finalizeShoppingList(lines: readonly ShoppingLine[]): ShoppingList {
   const sorted = [...lines].sort((a, b) => {
-    const byCategory = a.category.localeCompare(b.category);
-    return byCategory !== 0 ? byCategory : a.label.localeCompare(b.label);
+    const byAisle = aisleOrder(a.category) - aisleOrder(b.category);
+    return byAisle !== 0 ? byAisle : a.label.localeCompare(b.label);
   });
 
   const groups = new Map<IngredientCategory, ShoppingLine[]>();

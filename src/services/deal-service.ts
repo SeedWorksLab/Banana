@@ -1,4 +1,4 @@
-import type { MatchStatus } from '../models';
+import type { Currency, MatchStatus } from '../models';
 import { savingsPercent as percentOf } from '../utils/currency';
 
 export interface DealLike {
@@ -7,6 +7,7 @@ export interface DealLike {
   productName: string;
   brand: string | null;
   priceCents: number;
+  currency?: Currency;
   referencePriceCents: number | null;
   validFrom: string | null;
   validTo: string | null;
@@ -59,7 +60,8 @@ export function bestDealForIngredient(
   ingredientId: number,
   deals: readonly DealLike[],
   matches: readonly DealMatchLike[],
-  today: string
+  today: string,
+  currency?: Currency
 ): IngredientDeal | null {
   const byId = new Map(deals.map((deal) => [deal.id, deal]));
   const candidates: IngredientDeal[] = [];
@@ -69,6 +71,9 @@ export function bestDealForIngredient(
     }
     const deal = byId.get(match.dealId);
     if (!deal || !isDealActive(deal, today)) {
+      continue;
+    }
+    if (currency !== undefined && (deal.currency ?? 'EUR') !== currency) {
       continue;
     }
     candidates.push({ deal, confidence: match.confidence, savingsCents: savingsCents(deal) });
@@ -95,11 +100,12 @@ export function bestDealByIngredient(
   ingredientIds: readonly number[],
   deals: readonly DealLike[],
   matches: readonly DealMatchLike[],
-  today: string
+  today: string,
+  currency?: Currency
 ): Map<number, IngredientDeal> {
   const result = new Map<number, IngredientDeal>();
   for (const ingredientId of ingredientIds) {
-    const best = bestDealForIngredient(ingredientId, deals, matches, today);
+    const best = bestDealForIngredient(ingredientId, deals, matches, today, currency);
     if (best) {
       result.set(ingredientId, best);
     }

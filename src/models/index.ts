@@ -59,8 +59,48 @@ export const UNITS = [
 ] as const;
 export type Unit = (typeof UNITS)[number];
 
-export const STORE_IDS = ['lidl', 'hofer', 'spar'] as const;
+export const COUNTRIES = ['AT', 'HU'] as const;
+export type Country = (typeof COUNTRIES)[number];
+
+export const CURRENCIES = ['EUR', 'HUF'] as const;
+export type Currency = (typeof CURRENCIES)[number];
+
+export const STORE_IDS = [
+  'lidl',
+  'hofer',
+  'spar',
+  'billa_at',
+  'dm_at',
+  'tedi_at',
+  'aldi_hu',
+  'lidl_hu',
+  'spar_hu',
+] as const;
 export type StoreId = (typeof STORE_IDS)[number];
+
+export const STORE_COUNTRIES: Record<StoreId, Country> = {
+  lidl: 'AT',
+  hofer: 'AT',
+  spar: 'AT',
+  billa_at: 'AT',
+  dm_at: 'AT',
+  tedi_at: 'AT',
+  aldi_hu: 'HU',
+  lidl_hu: 'HU',
+  spar_hu: 'HU',
+};
+
+export const STORE_CURRENCIES: Record<StoreId, Currency> = {
+  lidl: 'EUR',
+  hofer: 'EUR',
+  spar: 'EUR',
+  billa_at: 'EUR',
+  dm_at: 'EUR',
+  tedi_at: 'EUR',
+  aldi_hu: 'HUF',
+  lidl_hu: 'HUF',
+  spar_hu: 'HUF',
+};
 
 export const RECIPE_SOURCES = ['builtin', 'own', 'ai'] as const;
 export type RecipeSource = (typeof RECIPE_SOURCES)[number];
@@ -89,6 +129,7 @@ export type SlotEventKind = (typeof SLOT_EVENT_KINDS)[number];
 
 export interface Settings {
   themeMode: ThemeMode;
+  currency: Currency;
   defaultServings: number;
   defaultWeeknightMinutes: number;
   defaultWeekendMinutes: number;
@@ -150,6 +191,8 @@ export interface Store {
   uuid: string | null;
   storeId: StoreId;
   name: string;
+  country: Country;
+  currency: Currency;
   offersUrl: string;
   enabled: boolean;
   lastScrapedAt: string | null;
@@ -244,6 +287,7 @@ export interface WeekDayBudget {
   day: WeekDay;
   mode: DayMode;
   cookMinutes: number;
+  servings: number | null;
   createdAt: string;
   updatedAt: string | null;
 }
@@ -259,6 +303,7 @@ export interface Slot {
   freeText: string | null;
   servings: number;
   note: string | null;
+  pinned: boolean;
   cookedAt: string | null;
   rating: number | null;
   sortOrder: number;
@@ -306,6 +351,7 @@ export interface Deal {
   productName: string;
   brand: string | null;
   priceCents: number;
+  currency: Currency;
   referencePriceCents: number | null;
   unit: string | null;
   quantityText: string | null;
@@ -313,6 +359,7 @@ export interface Deal {
   validTo: string | null;
   sourceUrl: string | null;
   scrapedAt: string;
+  rawText: string | null;
   createdAt: string;
   updatedAt: string | null;
   deleted: boolean;

@@ -1,5 +1,6 @@
 import type {
   Ingredient,
+  IngredientCategory,
   Recipe,
   RecipeIngredient,
   RecipeStep,
@@ -58,23 +59,69 @@ export function buildIngredientNamesByRecipe(
 
 const BATCH_TAGS = new Set(['batch', 'freezer', 'leftovers']);
 
+export interface IngredientFacts {
+  ids: number[];
+  categories: IngredientCategory[];
+}
+
+export function buildIngredientFactsByRecipe(
+  recipeIngredients: readonly RecipeIngredient[],
+  ingredients: readonly Ingredient[]
+): Map<number, IngredientFacts> {
+  const ingredientById = new Map(ingredients.map((ingredient) => [ingredient.id, ingredient]));
+  const factsByRecipe = new Map<number, IngredientFacts>();
+  for (const row of recipeIngredients) {
+    const ingredient = ingredientById.get(row.ingredientId);
+    if (!ingredient) {
+      continue;
+    }
+    let facts = factsByRecipe.get(row.recipeId);
+    if (!facts) {
+      facts = { ids: [], categories: [] };
+      factsByRecipe.set(row.recipeId, facts);
+    }
+    if (!facts.ids.includes(row.ingredientId)) {
+      facts.ids.push(row.ingredientId);
+      facts.categories.push(ingredient.category);
+    }
+  }
+  return factsByRecipe;
+}
+
 export function buildPlannerRecipes(
   summaries: readonly RecipeSummary[],
   ingredientNamesByRecipe: ReadonlyMap<number, string[]>,
-  defaultServings: number
+  defaultServings: number,
+  options: {
+    factsByRecipe?: ReadonlyMap<number, IngredientFacts>;
+    stockedIngredientIds?: ReadonlySet<number>;
+    onOfferIngredientIds?: ReadonlySet<number>;
+  } = {}
 ): PlannerRecipe[] {
-  return summaries.map((summary) => ({
-    id: summary.id,
-    name: summary.name,
-    category: summary.category,
-    prepMinutes: summary.prepMinutes,
-    cookMinutes: summary.cookMinutes,
-    ingredientNames: ingredientNamesByRecipe.get(summary.id) ?? [],
-    tags: summary.tags,
-    servings: defaultServings,
-    isFavorite: summary.isFavorite,
-    batchFriendly: summary.tags.some((tag) => BATCH_TAGS.has(tag.toLowerCase())),
-  }));
+  return summaries.map((summary) => {
+    const facts = options.factsByRecipe?.get(summary.id);
+    const ingredientIds = facts?.ids ?? [];
+    return {
+      id: summary.id,
+      name: summary.name,
+      category: summary.category,
+      prepMinutes: summary.prepMinutes,
+      cookMinutes: summary.cookMinutes,
+      ingredientNames: ingredientNamesByRecipe.get(summary.id) ?? [],
+      tags: summary.tags,
+      servings: defaultServings,
+      isFavorite: summary.isFavorite,
+      batchFriendly: summary.tags.some((tag) => BATCH_TAGS.has(tag.toLowerCase())),
+      ingredientIds,
+      ingredientCategories: facts?.categories,
+      stockedIngredientIds: ingredientIds.filter((id) =>
+        options.stockedIngredientIds?.has(id)
+      ),
+      onOfferIngredientIds: ingredientIds.filter((id) =>
+        options.onOfferIngredientIds?.has(id)
+      ),
+    };
+  });
 }
 
 export function buildPlannedMeals(

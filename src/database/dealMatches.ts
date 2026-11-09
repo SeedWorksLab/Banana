@@ -82,6 +82,22 @@ export async function upsertDealMatch(
   );
 }
 
+/**
+ * Records a newly discovered match without ever overwriting a status the user
+ * has already confirmed or rejected. Refresh runs are idempotent for matches.
+ */
+export async function ensureDealMatch(
+  input: { dealId: number; ingredientId: number; confidence: number },
+  db?: SQLiteDatabase
+): Promise<void> {
+  const database = db ?? (await getDatabase());
+  await database.runAsync(
+    `INSERT OR IGNORE INTO deal_matches (uuid, deal_id, ingredient_id, confidence, status)
+     VALUES (?, ?, ?, ?, 'auto')`,
+    [newUuid(), input.dealId, input.ingredientId, input.confidence]
+  );
+}
+
 export async function setDealMatchStatus(
   id: number,
   status: MatchStatus,

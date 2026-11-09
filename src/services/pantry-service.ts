@@ -66,3 +66,52 @@ export function pantryLevelFor(
 ): PantryLevel | null {
   return findPantryItem(items, ingredientId)?.level ?? null;
 }
+
+export interface PantryCoverage {
+  stocked: number[];
+  low: number[];
+  out: number[];
+  unknown: number[];
+  missing: number[];
+}
+
+/**
+ * Splits the ingredients a recipe needs into what is already in the house and
+ * what still has to be bought. "Low" counts as needing a top-up, mirroring
+ * `shortage` so the recipe view and the shopping list never disagree.
+ */
+export function pantryCoverage(
+  ingredientIds: readonly number[],
+  items: readonly PantryLookupItem[]
+): PantryCoverage {
+  const coverage: PantryCoverage = {
+    stocked: [],
+    low: [],
+    out: [],
+    unknown: [],
+    missing: [],
+  };
+  for (const ingredientId of new Set(ingredientIds)) {
+    const level = pantryLevelFor(items, ingredientId);
+    if (level === 'stocked') {
+      coverage.stocked.push(ingredientId);
+    } else if (level === 'low') {
+      coverage.low.push(ingredientId);
+      coverage.missing.push(ingredientId);
+    } else if (level === 'out') {
+      coverage.out.push(ingredientId);
+      coverage.missing.push(ingredientId);
+    } else {
+      coverage.unknown.push(ingredientId);
+      coverage.missing.push(ingredientId);
+    }
+  }
+  return coverage;
+}
+
+export function canCookFromPantry(
+  ingredientIds: readonly number[],
+  items: readonly PantryLookupItem[]
+): boolean {
+  return pantryCoverage(ingredientIds, items).missing.length === 0;
+}

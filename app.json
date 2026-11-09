@@ -30,6 +30,20 @@
       "expo-sharing",
       "expo-notifications",
       [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Banana uses the microphone only while you dictate meal wishes.",
+          "speechRecognitionPermission": "Banana transcribes your voice so you can dictate next week's meals."
+        }
+      ],
+      [
+        "expo-share-intent",
+        {
+          "androidIntentFilters": ["text/*"],
+          "disableIOS": true
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/splash-icon.png",

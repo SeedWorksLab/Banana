@@ -8,13 +8,24 @@ import { KeyboardAwareScrollView } from '../../components/keyboard-aware-scroll-
 import { NumberField } from '../../components/number-field';
 import { OptionField } from '../../components/option-field';
 import { useAppData } from '../../data/DataProvider';
-import { DIETS, THEME_MODES } from '../../models';
-import { DIET_LABELS } from '../../utils/labels';
-import { formatCents } from '../../utils/currency';
+import { COUNTRIES, CURRENCIES, DIETS, THEME_MODES } from '../../models';
+import { isStoreSupported } from '../../deals/providers';
+import { COUNTRY_LABELS, DIET_LABELS } from '../../utils/labels';
+import {
+  CURRENCY_LABELS,
+  currencySymbol,
+  formatCents,
+  fromMinorUnits,
+  toMinorUnits,
+} from '../../utils/currency';
 
 const THEME_OPTIONS = THEME_MODES.map((mode) => ({
   value: mode,
   label: mode.charAt(0).toUpperCase() + mode.slice(1),
+}));
+const CURRENCY_OPTIONS = CURRENCIES.map((currency) => ({
+  value: currency,
+  label: CURRENCY_LABELS[currency],
 }));
 const DIET_OPTIONS = DIETS.map((diet) => ({ value: diet, label: DIET_LABELS[diet] }));
 
@@ -27,7 +38,14 @@ function splitList(text: string): string[] {
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { settings, preferences, saveSettings, savePreferences } = useAppData();
+  const {
+    settings,
+    preferences,
+    stores,
+    saveSettings,
+    savePreferences,
+    setStoreEnabled,
+  } = useAppData();
   const [allergiesText, setAllergiesText] = useState(() => preferences.allergies.join(', '));
   const [dislikesText, setDislikesText] = useState(() => preferences.dislikes.join(', '));
 
@@ -44,6 +62,22 @@ export default function SettingsScreen() {
               nullable={false}
               onChange={(value) => value !== null && void saveSettings({ themeMode: value })}
             />
+          </Card.Content>
+        </Card>
+
+        <Card>
+          <Card.Content>
+            <Text variant="titleMedium">Currency</Text>
+            <OptionField
+              label="Budget and list currency"
+              value={settings.currency}
+              options={CURRENCY_OPTIONS}
+              nullable={false}
+              onChange={(value) => value !== null && void saveSettings({ currency: value })}
+            />
+            <Text variant="bodySmall">
+              Store offers stay in their own currency. Amounts are not converted.
+            </Text>
           </Card.Content>
         </Card>
 
@@ -110,14 +144,53 @@ export default function SettingsScreen() {
             />
             <NumberField
               label="Weekly budget"
-              unit="€"
-              value={preferences.weeklyBudgetCents / 100}
+              unit={currencySymbol(settings.currency)}
+              value={fromMinorUnits(preferences.weeklyBudgetCents, settings.currency)}
               onChange={(value) =>
-                value !== null && void savePreferences({ weeklyBudgetCents: Math.round(value * 100) })
+                value !== null &&
+                void savePreferences({
+                  weeklyBudgetCents: toMinorUnits(value, settings.currency),
+                })
               }
-              helperText={formatCents(preferences.weeklyBudgetCents)}
+              helperText={formatCents(preferences.weeklyBudgetCents, settings.currency)}
             />
           </Card.Content>
+        </Card>
+
+        <Card>
+          <Card.Content>
+            <Text variant="titleMedium">Shops</Text>
+            <Text variant="bodySmall">
+              Deals are fetched only from enabled shops. Unavailable shops have no public offer
+              feed yet.
+            </Text>
+          </Card.Content>
+          {COUNTRIES.map((country) => (
+            <View key={country}>
+              <List.Subheader>{COUNTRY_LABELS[country]}</List.Subheader>
+              {stores
+                .filter((store) => store.country === country)
+                .map((store) => {
+                  const supported = isStoreSupported(store.storeId);
+                  return (
+                    <List.Item
+                      key={store.id}
+                      title={store.name}
+                      description={supported ? undefined : 'No public offer feed found'}
+                      right={() => (
+                        <Switch
+                          value={store.enabled}
+                          disabled={!supported}
+                          onValueChange={(value) => void setStoreEnabled(store.id, value)}
+                          accessibilityLabel={`Enable ${store.name} offers`}
+                          accessibilityState={{ checked: store.enabled, disabled: !supported }}
+                        />
+                      )}
+                    />
+                  );
+                })}
+            </View>
+          ))}
         </Card>
 
         <Card>

@@ -1,6 +1,8 @@
 import {
   AI_RUN_KINDS,
   AI_RUN_STATUSES,
+  COUNTRIES,
+  CURRENCIES,
   DIETS,
   INGREDIENT_CATEGORIES,
   MATCH_STATUSES,
@@ -10,6 +12,8 @@ import {
   SCRAPE_RUN_STATUSES,
   SLOT_EVENT_KINDS,
   SLOT_KINDS,
+  STORE_COUNTRIES,
+  STORE_CURRENCIES,
   STORE_IDS,
   UNITS,
   WEEK_DAYS,
@@ -29,6 +33,33 @@ const MEAL_TYPE_CHECK = enumCheck('meal_type', MEAL_TYPES);
 const UNIT_CHECK = enumCheck('unit', UNITS);
 const CATEGORY_CHECK = enumCheck('category', INGREDIENT_CATEGORIES);
 const RECIPE_CATEGORY_CHECK = enumCheck('category', MEAL_TYPES);
+const COUNTRY_CHECK = enumCheck('country', COUNTRIES);
+const CURRENCY_CHECK = enumCheck('currency', CURRENCIES);
+
+export function storesTableSql(table = 'stores', includeIndex = true): string {
+  return `
+CREATE TABLE IF NOT EXISTS ${table} (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  uuid TEXT,
+  store_id TEXT NOT NULL UNIQUE CHECK (store_id IN (${quoted(STORE_IDS)})),
+  name TEXT NOT NULL,
+  country TEXT NOT NULL DEFAULT 'AT' ${COUNTRY_CHECK},
+  currency TEXT NOT NULL DEFAULT 'EUR' ${CURRENCY_CHECK},
+  offers_url TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  last_scraped_at TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (${NOW}),
+  updated_at TEXT,
+  deleted INTEGER NOT NULL DEFAULT 0
+);
+${
+  includeIndex
+    ? `\nCREATE UNIQUE INDEX IF NOT EXISTS idx_stores_uuid ON ${table} (uuid);\n`
+    : ''
+}`;
+}
 
 export const SCHEMA_SQL = `
 -- Configuration -------------------------------------------------------------
@@ -69,7 +100,7 @@ CREATE TABLE IF NOT EXISTS ingredients (
   uuid TEXT,
   name TEXT NOT NULL,
   category TEXT NOT NULL DEFAULT 'other' ${CATEGORY_CHECK},
-  default_unit TEXT NOT NULL DEFAULT 'piece' ${UNIT_CHECK},
+  default_unit TEXT NOT NULL DEFAULT 'piece' ${enumCheck('default_unit', UNITS)},
   default_quantity REAL,
   is_pantry_staple INTEGER NOT NULL DEFAULT 0,
   notes TEXT,
@@ -98,22 +129,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ingredient_aliases_uuid ON ingredient_alia
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ingredient_aliases_alias ON ingredient_aliases (alias);
 CREATE INDEX IF NOT EXISTS idx_ingredient_aliases_ingredient ON ingredient_aliases (ingredient_id);
 
-CREATE TABLE IF NOT EXISTS stores (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  uuid TEXT,
-  store_id TEXT NOT NULL UNIQUE CHECK (store_id IN (${quoted(STORE_IDS)})),
-  name TEXT NOT NULL,
-  offers_url TEXT NOT NULL,
-  enabled INTEGER NOT NULL DEFAULT 0,
-  last_scraped_at TEXT,
-  active INTEGER NOT NULL DEFAULT 1,
-  sort_order INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (${NOW}),
-  updated_at TEXT,
-  deleted INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_stores_uuid ON stores (uuid);
+${storesTableSql()}
 
 -- Recipes -------------------------------------------------------------------
 
@@ -315,6 +331,7 @@ CREATE TABLE IF NOT EXISTS deals (
   product_name TEXT NOT NULL,
   brand TEXT,
   price_cents INTEGER NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'EUR' ${CURRENCY_CHECK},
   reference_price_cents INTEGER,
   unit TEXT,
   quantity_text TEXT,
@@ -393,10 +410,31 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_runs_uuid ON ai_runs (uuid);
 CREATE INDEX IF NOT EXISTS idx_ai_runs_week ON ai_runs (week_id, created_at);
 `;
 
+const STORE_SEED: {
+  uuid: string;
+  storeId: (typeof STORE_IDS)[number];
+  name: string;
+  offersUrl: string;
+  enabled: number;
+  sortOrder: number;
+}[] = [
+  { uuid: 'store-lidl', storeId: 'lidl', name: 'Lidl', offersUrl: 'https://www.lidl.at/', enabled: 1, sortOrder: 1 },
+  { uuid: 'store-hofer', storeId: 'hofer', name: 'Hofer', offersUrl: 'https://shop.hofer.at/sale', enabled: 1, sortOrder: 2 },
+  { uuid: 'store-spar', storeId: 'spar', name: 'Spar', offersUrl: 'https://www.spar.at/aktionen', enabled: 0, sortOrder: 3 },
+  { uuid: 'store-billa-at', storeId: 'billa_at', name: 'Billa', offersUrl: 'https://shop.billa.at/aktionen', enabled: 0, sortOrder: 4 },
+  { uuid: 'store-dm-at', storeId: 'dm_at', name: 'dm', offersUrl: 'https://www.dm.at/', enabled: 0, sortOrder: 5 },
+  { uuid: 'store-tedi-at', storeId: 'tedi_at', name: 'Tedi', offersUrl: 'https://www.tedi.com/at/', enabled: 0, sortOrder: 6 },
+  { uuid: 'store-aldi-hu', storeId: 'aldi_hu', name: 'Aldi', offersUrl: 'https://www.aldi.hu/szuper-akciok-mindennap', enabled: 0, sortOrder: 7 },
+  { uuid: 'store-lidl-hu', storeId: 'lidl_hu', name: 'Lidl', offersUrl: 'https://www.lidl.hu/', enabled: 0, sortOrder: 8 },
+  { uuid: 'store-spar-hu', storeId: 'spar_hu', name: 'Spar', offersUrl: 'https://www.spar.hu/ajanlatok', enabled: 0, sortOrder: 9 },
+];
+
 export const SEED_STORES_SQL = `
-INSERT OR IGNORE INTO stores (uuid, store_id, name, offers_url, enabled, sort_order)
+INSERT OR IGNORE INTO stores
+  (uuid, store_id, name, country, currency, offers_url, enabled, sort_order)
 VALUES
-  ('store-lidl', 'lidl', 'Lidl', 'https://www.lidl.at/', 1, 1),
-  ('store-hofer', 'hofer', 'Hofer', 'https://www.hofer.at/', 1, 2),
-  ('store-spar', 'spar', 'Spar', 'https://www.spar.at/', 0, 3);
+${STORE_SEED.map(
+  (store) =>
+    `  ('${store.uuid}', '${store.storeId}', '${store.name.replace(/'/g, "''")}', '${STORE_COUNTRIES[store.storeId]}', '${STORE_CURRENCIES[store.storeId]}', '${store.offersUrl}', ${store.enabled}, ${store.sortOrder})`
+).join(',\n')};
 `;

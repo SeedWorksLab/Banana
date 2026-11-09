@@ -13,6 +13,7 @@ export interface SlotInput {
   freeText: string | null;
   servings: number;
   note: string | null;
+  pinned?: boolean;
   sortOrder: number;
 }
 
@@ -27,6 +28,7 @@ interface SlotRow {
   free_text: string | null;
   servings: number;
   note: string | null;
+  pinned: number;
   cooked_at: string | null;
   rating: number | null;
   sort_order: number;
@@ -51,6 +53,7 @@ function rowToSlot(row: SlotRow): Slot {
     freeText: row.free_text,
     servings: row.servings,
     note: row.note,
+    pinned: row.pinned === 1,
     cookedAt: row.cooked_at,
     rating: row.rating,
     sortOrder: row.sort_order,
@@ -61,7 +64,7 @@ function rowToSlot(row: SlotRow): Slot {
 }
 
 const SELECT = `SELECT id, uuid, week_id, day, meal_type, kind, recipe_id, free_text, servings,
-                       note, cooked_at, rating, sort_order, created_at, updated_at, deleted
+                       note, pinned, cooked_at, rating, sort_order, created_at, updated_at, deleted
                   FROM slots`;
 
 export async function getSlotsByWeek(weekId: number, db?: SQLiteDatabase): Promise<Slot[]> {
@@ -79,12 +82,23 @@ export async function getSlot(id: number, db?: SQLiteDatabase): Promise<Slot | n
   return row ? rowToSlot(row) : null;
 }
 
+export async function getRecipeHistory(
+  db?: SQLiteDatabase
+): Promise<{ recipeId: number; rating: number | null }[]> {
+  const database = db ?? (await getDatabase());
+  const rows = await database.getAllAsync<{ recipe_id: number; rating: number | null }>(
+    `SELECT recipe_id, rating FROM slots
+      WHERE deleted = 0 AND recipe_id IS NOT NULL AND cooked_at IS NOT NULL`
+  );
+  return rows.map((row) => ({ recipeId: row.recipe_id, rating: row.rating }));
+}
+
 export async function createSlot(input: SlotInput, db?: SQLiteDatabase): Promise<number> {
   const database = db ?? (await getDatabase());
   const result = await database.runAsync(
     `INSERT INTO slots
-       (uuid, week_id, day, meal_type, kind, recipe_id, free_text, servings, note, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (uuid, week_id, day, meal_type, kind, recipe_id, free_text, servings, note, pinned, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       newUuid(),
       input.weekId,
@@ -95,6 +109,7 @@ export async function createSlot(input: SlotInput, db?: SQLiteDatabase): Promise
       input.freeText,
       input.servings,
       input.note,
+      input.pinned ? 1 : 0,
       input.sortOrder,
     ]
   );
@@ -110,7 +125,7 @@ export async function updateSlot(
   await database.runAsync(
     `UPDATE slots
         SET day = ?, meal_type = ?, kind = ?, recipe_id = ?, free_text = ?, servings = ?,
-            note = ?, sort_order = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            note = ?, pinned = ?, sort_order = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE id = ?`,
     [
       input.day,
@@ -120,6 +135,7 @@ export async function updateSlot(
       input.freeText,
       input.servings,
       input.note,
+      input.pinned ? 1 : 0,
       input.sortOrder,
       id,
     ]

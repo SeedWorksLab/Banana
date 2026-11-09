@@ -11,6 +11,7 @@ interface WeekDayBudgetRow {
   day: WeekDay;
   mode: DayMode;
   cook_minutes: number;
+  servings: number | null;
   created_at: string;
   updated_at: string | null;
 }
@@ -27,12 +28,13 @@ function rowToWeekDayBudget(row: WeekDayBudgetRow): WeekDayBudget {
     day: row.day,
     mode: parseMode(row.mode),
     cookMinutes: row.cook_minutes,
+    servings: row.servings,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
-const SELECT = `SELECT id, uuid, week_id, day, mode, cook_minutes, created_at, updated_at
+const SELECT = `SELECT id, uuid, week_id, day, mode, cook_minutes, servings, created_at, updated_at
                   FROM week_day_budgets`;
 
 export async function getWeekDayBudgets(
@@ -48,17 +50,18 @@ export async function getWeekDayBudgets(
 }
 
 export async function upsertWeekDayBudget(
-  input: { weekId: number; day: WeekDay; mode: DayMode; cookMinutes: number },
+  input: { weekId: number; day: WeekDay; mode: DayMode; cookMinutes: number; servings?: number | null },
   db?: SQLiteDatabase
 ): Promise<void> {
   const database = db ?? (await getDatabase());
   await database.runAsync(
-    `INSERT INTO week_day_budgets (uuid, week_id, day, mode, cook_minutes)
-     VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO week_day_budgets (uuid, week_id, day, mode, cook_minutes, servings)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT (week_id, day) DO UPDATE
        SET mode = excluded.mode, cook_minutes = excluded.cook_minutes,
+           servings = excluded.servings,
            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
-    [newUuid(), input.weekId, input.day, input.mode, input.cookMinutes]
+    [newUuid(), input.weekId, input.day, input.mode, input.cookMinutes, input.servings ?? null]
   );
 }
 

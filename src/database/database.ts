@@ -42,8 +42,18 @@ export async function migrate(db: SQLiteDatabase): Promise<void> {
   );
   for (const migration of pending) {
     await db.withTransactionAsync(async () => {
-      await db.execAsync(migration.sql);
-      await db.execAsync(`PRAGMA user_version = ${migration.id}`);
+      try {
+        if (migration.sql !== '') {
+          await db.execAsync(migration.sql);
+        }
+        if (migration.apply) {
+          await migration.apply(db);
+        }
+        await db.execAsync(`PRAGMA user_version = ${migration.id}`);
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : String(caught);
+        throw new Error(`Migration ${migration.id} (${migration.description}) failed: ${message}`);
+      }
     });
   }
 }

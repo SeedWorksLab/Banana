@@ -1,0 +1,36 @@
+{
+  "paging": { "pageCount": 2 },
+  "hits": [
+    {
+      "masterValues": {
+        "name1": "Bahlsen Leibniz",
+        "name2": "Butterkeks weniger Zucker",
+        "name3": "150 G",
+        "geoInformation": [
+          {
+            "geoValues": {
+              "calculatedPrice": 2.29,
+              "stattPrice": 2.49,
+              "comparisonPrice_unit": "kg"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "masterValues": {
+        "name1": "S-Budget",
+        "name2": "Eier Freiland",
+        "name3": "10 STK",
+        "geoInformation": [
+          {
+            "geoValues": {
+              "calculatedPrice": 3.49,
+              "comparisonPrice_unit": "Stück"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

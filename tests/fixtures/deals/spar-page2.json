@@ -1,0 +1,20 @@
+{
+  "paging": { "pageCount": 2 },
+  "hits": [
+    {
+      "masterValues": {
+        "name1": "Spar",
+        "name2": "Naturjoghurt",
+        "name3": "500 G",
+        "geoInformation": [
+          {
+            "geoValues": {
+              "calculatedPrice": 1.19,
+              "comparisonPrice_unit": "kg"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

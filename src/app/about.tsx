@@ -1,5 +1,5 @@
 import React from 'react';
-import { Linking, StyleSheet } from 'react-native';
+import { Image, Linking, StyleSheet } from 'react-native';
 import { List, Text } from 'react-native-paper';
 
 import { ScreenFade } from '../components/screen-fade';
@@ -14,6 +14,12 @@ export default function AboutScreen() {
   return (
     <ScreenFade>
       <KeyboardAwareScrollView contentContainerStyle={[styles.container, { padding: theme.spacing[4] }]}>
+        <Image
+          source={require('../../assets/banana-banner.jpg')}
+          style={[styles.banner, { borderRadius: theme.radii.large }]}
+          resizeMode="cover"
+          accessibilityLabel="Banana banner"
+        />
         <Text variant="headlineSmall">
           Banana
         </Text>
@@ -60,6 +66,11 @@ export default function AboutScreen() {
 const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
+  },
+  banner: {
+    width: '100%',
+    height: 160,
+    marginBottom: 16,
   },
   section: {
     marginTop: 24,

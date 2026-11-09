@@ -1,4 +1,5 @@
 import type {
+  Country,
   DayMode,
   Diet,
   IngredientCategory,
@@ -84,10 +85,21 @@ export const UNIT_LABELS: Record<Unit, string> = {
   to_taste: 'to taste',
 };
 
+export const COUNTRY_LABELS: Record<Country, string> = {
+  AT: 'Austria',
+  HU: 'Hungary',
+};
+
 export const STORE_LABELS: Record<StoreId, string> = {
   lidl: 'Lidl',
   hofer: 'Hofer',
   spar: 'Spar',
+  billa_at: 'Billa',
+  dm_at: 'dm',
+  tedi_at: 'Tedi',
+  aldi_hu: 'Aldi',
+  lidl_hu: 'Lidl',
+  spar_hu: 'Spar',
 };
 
 export function mealTypeLabel(mealType: MealType): string {

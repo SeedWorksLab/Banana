@@ -19,6 +19,10 @@ function recipe(partial: Partial<PlannerRecipe>): PlannerRecipe {
     servings: partial.servings ?? 2,
     isFavorite: partial.isFavorite ?? false,
     batchFriendly: partial.batchFriendly ?? false,
+    ingredientIds: partial.ingredientIds,
+    ingredientCategories: partial.ingredientCategories,
+    stockedIngredientIds: partial.stockedIngredientIds,
+    onOfferIngredientIds: partial.onOfferIngredientIds,
   };
 }
 
@@ -32,6 +36,7 @@ describe('scoreRecipe', () => {
   const context = {
     ratings: new Map<number, number>(),
     usedRecipeIds: new Set<number>(),
+    usedIngredientIds: new Set<number>(),
     previousCategory: null,
     defaultServings: 2,
   };
@@ -47,6 +52,43 @@ describe('scoreRecipe', () => {
     const fresh = scoreRecipe(recipe({ id: 1 }), day('mon'), context);
     const repeat = scoreRecipe(recipe({ id: 1 }), day('mon'), used);
     expect(repeat).toBeLessThan(fresh);
+  });
+
+  it('prefers a recipe that reuses ingredients the week already needs', () => {
+    const used = { ...context, usedIngredientIds: new Set([10]) };
+    const reuses = scoreRecipe(recipe({ ingredientIds: [10, 11] }), day('mon'), used);
+    const allNew = scoreRecipe(recipe({ ingredientIds: [20, 21] }), day('mon'), used);
+    expect(reuses).toBeGreaterThan(allNew);
+  });
+
+  it('prefers a recipe whose ingredients are on offer', () => {
+    const onOffer = scoreRecipe(recipe({ onOfferIngredientIds: [1, 2, 3] }), day('mon'), context);
+    const fullPrice = scoreRecipe(recipe({ onOfferIngredientIds: [] }), day('mon'), context);
+    expect(onOffer).toBeGreaterThan(fullPrice);
+  });
+
+  it('prefers a recipe built around fresh produce', () => {
+    const fresh = scoreRecipe(
+      recipe({ ingredientCategories: ['produce', 'produce', 'pantry'] }),
+      day('mon'),
+      context
+    );
+    const heavy = scoreRecipe(
+      recipe({ ingredientCategories: ['meat_fish', 'dairy', 'pantry'] }),
+      day('mon'),
+      context
+    );
+    expect(fresh).toBeGreaterThan(heavy);
+  });
+
+  it('prefers a recipe that uses food already in the pantry', () => {
+    const stocked = scoreRecipe(
+      recipe({ stockedIngredientIds: [1, 2, 3] }),
+      day('mon'),
+      context
+    );
+    const empty = scoreRecipe(recipe({ stockedIngredientIds: [] }), day('mon'), context);
+    expect(stocked).toBeGreaterThan(empty);
   });
 });
 
@@ -68,6 +110,27 @@ describe('planWeek', () => {
     expect(proposal.slots[1].kind).toBe('leftovers');
   });
 
+  it('uses a per-day servings override for planned and pinned meals', () => {
+    const proposal = planWeek({
+      days: [{ ...day('mon'), servings: 5 }, { ...day('tue'), servings: 3 }],
+      recipes: [recipe({ id: 1 }), recipe({ id: 2 })],
+      pinned: [{ day: 'tue', mealType: 'dinner', recipeId: 2, freeText: null }],
+      defaultServings: 2,
+    });
+    expect(proposal.slots[0].servings).toBe(5);
+    expect(proposal.slots[1].servings).toBe(3);
+    expect(proposal.slots[1].reason).toBe('Pinned by you');
+  });
+
+  it('falls back to the household servings when a day has none', () => {
+    const proposal = planWeek({
+      days: [day('mon')],
+      recipes: [recipe({ id: 1 })],
+      defaultServings: 4,
+    });
+    expect(proposal.slots[0].servings).toBe(4);
+  });
+
   it('chooses the recipe that fits the day budget', () => {
     const proposal = planWeek({
       days: [day('mon', 'cook', 30)],
@@ -82,6 +145,19 @@ describe('planWeek', () => {
     const proposal = planWeek({
       days: [day('mon', 'cook', 60), day('tue', 'cook', 60)],
       recipes: [recipe({ id: 1 }), recipe({ id: 2 })],
+      defaultServings: 2,
+    });
+    expect(proposal.slots.map((s) => s.recipeId)).toEqual([1, 2]);
+  });
+
+  it('reuses ingredients across days to keep the list short', () => {
+    const proposal = planWeek({
+      days: [day('mon', 'cook', 60), day('tue', 'cook', 60)],
+      recipes: [
+        recipe({ id: 1, ingredientIds: [10] }),
+        recipe({ id: 2, ingredientIds: [10, 11] }),
+        recipe({ id: 3, ingredientIds: [20, 21] }),
+      ],
       defaultServings: 2,
     });
     expect(proposal.slots.map((s) => s.recipeId)).toEqual([1, 2]);

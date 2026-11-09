@@ -20,6 +20,7 @@ function slot(partial: Partial<Slot>): Slot {
     freeText: partial.freeText ?? null,
     servings: partial.servings ?? 2,
     note: partial.note ?? null,
+    pinned: partial.pinned ?? false,
     cookedAt: partial.cookedAt ?? null,
     rating: partial.rating ?? null,
     sortOrder: partial.sortOrder ?? 0,
@@ -41,24 +42,32 @@ describe('buildDayPlans', () => {
   const weekend = { mode: 'cook' as const, cookMinutes: 60 };
 
   it('fills seven days from the defaults', () => {
-    const plans = buildDayPlans('2026-01-05', [], weeknight, weekend);
+    const plans = buildDayPlans('2026-01-05', [], weeknight, weekend, 3);
     expect(plans.map((p) => p.day)).toEqual(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']);
     expect(plans.map((p) => p.date)).toEqual([
       '2026-01-05', '2026-01-06', '2026-01-07', '2026-01-08', '2026-01-09', '2026-01-10', '2026-01-11',
     ]);
     expect(plans.slice(0, 5).every((p) => p.cookMinutes === 30)).toBe(true);
     expect(plans.slice(5).every((p) => p.cookMinutes === 60)).toBe(true);
+    expect(plans.every((p) => p.servings === 3)).toBe(true);
   });
 
   it('lets a stored budget override a day', () => {
     const plans = buildDayPlans(
       '2026-01-05',
-      [{ day: 'wed', mode: 'no_cook', cookMinutes: 0 }],
+      [{ day: 'wed', mode: 'no_cook', cookMinutes: 0, servings: 5 }],
       weeknight,
-      weekend
+      weekend,
+      2
     );
     const wed = plans.find((p) => p.day === 'wed');
-    expect(wed).toEqual({ day: 'wed', date: '2026-01-07', mode: 'no_cook', cookMinutes: 0 });
+    expect(wed).toEqual({
+      day: 'wed',
+      date: '2026-01-07',
+      mode: 'no_cook',
+      cookMinutes: 0,
+      servings: 5,
+    });
   });
 });
 

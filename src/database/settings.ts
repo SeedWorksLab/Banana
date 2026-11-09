@@ -1,10 +1,11 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
-import { THEME_MODES, WEEK_DAYS } from '../models';
-import type { Settings, ThemeMode, WeekDay } from '../models';
+import { CURRENCIES, THEME_MODES, WEEK_DAYS } from '../models';
+import type { Currency, Settings, ThemeMode, WeekDay } from '../models';
 import { getDatabase } from './database';
 
 export const DEFAULT_SETTINGS: Settings = {
   themeMode: 'system',
+  currency: 'EUR',
   defaultServings: 2,
   defaultWeeknightMinutes: 45,
   defaultWeekendMinutes: 90,
@@ -19,6 +20,7 @@ export const DEFAULT_SETTINGS: Settings = {
 
 type SettingsKey =
   | 'theme_mode'
+  | 'currency'
   | 'default_servings'
   | 'default_weeknight_minutes'
   | 'default_weekend_minutes'
@@ -32,6 +34,7 @@ type SettingsKey =
 
 const SETTINGS_KEY_MAP: Record<keyof Settings, SettingsKey> = {
   themeMode: 'theme_mode',
+  currency: 'currency',
   defaultServings: 'default_servings',
   defaultWeeknightMinutes: 'default_weeknight_minutes',
   defaultWeekendMinutes: 'default_weekend_minutes',
@@ -61,12 +64,21 @@ function parseWeekDay(value: string, fallback: WeekDay): WeekDay {
   return (WEEK_DAYS as readonly string[]).includes(value) ? (value as WeekDay) : fallback;
 }
 
+function parseCurrency(value: string): Currency {
+  return (CURRENCIES as readonly string[]).includes(value)
+    ? (value as Currency)
+    : DEFAULT_SETTINGS.currency;
+}
+
 function rowToSettings(rows: { key: SettingsKey; value: string }[]): Settings {
   const settings: Settings = { ...DEFAULT_SETTINGS };
   for (const row of rows) {
     switch (row.key) {
       case 'theme_mode':
         settings.themeMode = parseThemeMode(row.value);
+        break;
+      case 'currency':
+        settings.currency = parseCurrency(row.value);
         break;
       case 'default_servings':
         settings.defaultServings = clampInt(Number(row.value), 1, 20, DEFAULT_SETTINGS.defaultServings);

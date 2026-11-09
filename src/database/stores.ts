@@ -1,5 +1,5 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
-import type { Store, StoreId } from '../models';
+import type { Country, Currency, Store, StoreId } from '../models';
 import { newUuid } from '../utils/uuid';
 import { getDatabase } from './database';
 
@@ -8,6 +8,8 @@ interface StoreRow {
   uuid: string | null;
   store_id: StoreId;
   name: string;
+  country: Country;
+  currency: Currency;
   offers_url: string;
   enabled: number;
   last_scraped_at: string | null;
@@ -24,6 +26,8 @@ function rowToStore(row: StoreRow): Store {
     uuid: row.uuid,
     storeId: row.store_id,
     name: row.name,
+    country: row.country,
+    currency: row.currency,
     offersUrl: row.offers_url,
     enabled: row.enabled === 1,
     lastScrapedAt: row.last_scraped_at,
@@ -35,8 +39,8 @@ function rowToStore(row: StoreRow): Store {
   };
 }
 
-const SELECT = `SELECT id, uuid, store_id, name, offers_url, enabled, last_scraped_at,
-                       active, sort_order, created_at, updated_at, deleted
+const SELECT = `SELECT id, uuid, store_id, name, country, currency, offers_url, enabled,
+                       last_scraped_at, active, sort_order, created_at, updated_at, deleted
                   FROM stores`;
 
 export async function getAllStores(db?: SQLiteDatabase): Promise<Store[]> {
@@ -116,14 +120,31 @@ export async function markStoreScraped(
 }
 
 export async function createStore(
-  input: { storeId: StoreId; name: string; offersUrl: string; enabled: boolean; sortOrder: number },
+  input: {
+    storeId: StoreId;
+    name: string;
+    country: Country;
+    currency: Currency;
+    offersUrl: string;
+    enabled: boolean;
+    sortOrder: number;
+  },
   db?: SQLiteDatabase
 ): Promise<number> {
   const database = db ?? (await getDatabase());
   const result = await database.runAsync(
-    `INSERT INTO stores (uuid, store_id, name, offers_url, enabled, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [newUuid(), input.storeId, input.name, input.offersUrl, input.enabled ? 1 : 0, input.sortOrder]
+    `INSERT INTO stores (uuid, store_id, name, country, currency, offers_url, enabled, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      newUuid(),
+      input.storeId,
+      input.name,
+      input.country,
+      input.currency,
+      input.offersUrl,
+      input.enabled ? 1 : 0,
+      input.sortOrder,
+    ]
   );
   return result.lastInsertRowId;
 }

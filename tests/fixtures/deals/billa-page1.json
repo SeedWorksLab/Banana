@@ -1,0 +1,31 @@
+{
+  "total": 3,
+  "results": [
+    {
+      "name": "Glem Vital Shampoo",
+      "brand": { "name": "Glem Vital" },
+      "amount": "350",
+      "volumeLabelShort": "ml",
+      "packageLabel": "Flasche",
+      "price": {
+        "regular": { "value": 249 },
+        "crossed": 295,
+        "standard": { "value": 295 },
+        "baseUnitShort": "ml"
+      }
+    },
+    {
+      "name": "Bio Milch",
+      "brand": null,
+      "amount": "1",
+      "volumeLabelShort": "l",
+      "packageLabel": "Packung",
+      "price": {
+        "regular": { "value": 129 },
+        "crossed": null,
+        "standard": { "value": 129 },
+        "baseUnitShort": "l"
+      }
+    }
+  ]
+}

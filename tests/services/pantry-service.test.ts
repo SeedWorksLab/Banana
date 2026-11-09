@@ -1,5 +1,7 @@
 import {
+  canCookFromPantry,
   findPantryItem,
+  pantryCoverage,
   pantryLevelFor,
   shortage,
   stockingSuggestions,
@@ -78,5 +80,32 @@ describe('stockingSuggestions', () => {
       { ingredientId: 2, level: 'low' },
       { ingredientId: 3, level: 'out' },
     ]);
+  });
+});
+
+describe('pantryCoverage', () => {
+  const items = [
+    item({ ingredientId: 1, level: 'stocked' }),
+    item({ ingredientId: 2, level: 'low' }),
+    item({ ingredientId: 3, level: 'out' }),
+  ];
+
+  it('splits required ingredients into have and need', () => {
+    expect(pantryCoverage([1, 2, 3, 4, 1], items)).toEqual({
+      stocked: [1],
+      low: [2],
+      out: [3],
+      unknown: [4],
+      missing: [2, 3, 4],
+    });
+  });
+
+  it('says a recipe can be cooked when everything is stocked', () => {
+    expect(canCookFromPantry([1], items)).toBe(true);
+    expect(canCookFromPantry([1, 2], items)).toBe(false);
+  });
+
+  it('treats a recipe with no ingredients as cookable', () => {
+    expect(canCookFromPantry([], items)).toBe(true);
   });
 });

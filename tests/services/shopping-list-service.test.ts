@@ -3,10 +3,13 @@ import type { IngredientDeal } from '../../src/services/deal-service';
 import {
   addManualItem,
   aggregateIngredients,
+  aisleOrder,
   buildShoppingList,
   dimensionOf,
+  finalizeShoppingList,
   type PlannedIngredient,
   type PlannedMeal,
+  type ShoppingLine,
 } from '../../src/services/shopping-list-service';
 
 function ing(partial: Partial<PlannedIngredient>): PlannedIngredient {
@@ -150,6 +153,53 @@ describe('buildShoppingList', () => {
     expect(list.estimatedSavingsCents).toBe(100);
     expect(list.pricedLines).toBe(1);
     expect(list.unpricedLines).toBe(2);
+  });
+});
+
+describe('aisle routing', () => {
+  function line(partial: Partial<ShoppingLine>): ShoppingLine {
+    return {
+      ingredientId: partial.ingredientId ?? null,
+      label: partial.label ?? 'Item',
+      category: partial.category ?? 'other',
+      quantity: partial.quantity ?? 1,
+      unit: partial.unit ?? 'piece',
+      dealId: null,
+      storeId: null,
+      priceCents: null,
+      savingsCents: 0,
+    };
+  }
+
+  it('places fresh departments before shelf-stable aisles', () => {
+    expect(aisleOrder('produce')).toBeLessThan(aisleOrder('bakery'));
+    expect(aisleOrder('bakery')).toBeLessThan(aisleOrder('dairy'));
+    expect(aisleOrder('pantry')).toBeLessThan(aisleOrder('household'));
+    expect(aisleOrder('household')).toBeLessThan(aisleOrder('other'));
+  });
+
+  it('sorts the list and its groups by the walking route, not alphabetically', () => {
+    const list = finalizeShoppingList([
+      line({ label: 'Kitchen roll', category: 'household' }),
+      line({ label: 'Apples', category: 'produce' }),
+      line({ label: 'Rice', category: 'pantry' }),
+      line({ label: 'Bread', category: 'bakery' }),
+      line({ label: 'Milk', category: 'dairy' }),
+    ]);
+    expect(list.groups.map((group) => group.category)).toEqual([
+      'produce',
+      'bakery',
+      'dairy',
+      'pantry',
+      'household',
+    ]);
+    expect(list.lines.map((entry) => entry.label)).toEqual([
+      'Apples',
+      'Bread',
+      'Milk',
+      'Rice',
+      'Kitchen roll',
+    ]);
   });
 });
 

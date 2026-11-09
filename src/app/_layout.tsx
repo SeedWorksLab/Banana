@@ -6,6 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import { BananaThemeProvider, useAppTheme } from '../theme';
 import { buildNavigationTheme } from '../theme/navigation';
 import { DataProvider, useAppData } from '../data/DataProvider';
+import { ShareIntentImport } from '../components/share-intent-import';
 
 function ThemedContent() {
   const theme = useAppTheme();
@@ -32,6 +33,7 @@ function ThemedContent() {
           <Stack.Screen name="whats-new" options={{ title: "What's new" }} />
           <Stack.Screen name="about" options={{ title: 'About' }} />
         </Stack>
+        <ShareIntentImport />
       </PaperProvider>
     </ThemeProvider>
   );

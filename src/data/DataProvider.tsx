@@ -3,6 +3,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 import type {
   AiRun,
   AiState,
+  Currency,
   Deal,
   DealMatch,
   DayMode,
@@ -61,6 +62,7 @@ import {
   createSlot as createSlotRow,
   deleteSlot as deleteSlotRow,
   getSlotsByWeek,
+  getRecipeHistory,
   setSlotRating as setSlotRatingRow,
   updateSlot as updateSlotRow,
   type SlotInput,
@@ -75,7 +77,10 @@ import { getWeekDayBudgets, upsertWeekDayBudget } from '../database/weekDayBudge
 import { ensureWeek, setWeekStatus as setWeekStatusRow } from '../database/weeks';
 import { todayDate } from '../utils/date';
 import { buildShoppingList, type PlannedMeal } from '../services/shopping-list-service';
+import type { RatingEntry } from '../services/recipe-service';
+import { matchTicketLines, parseTicketText } from '../services/ticket-service';
 import { bestDealForIngredient, type IngredientDeal } from '../services/deal-service';
+import { refreshDeals as refreshDealsFromStores, type DealRefreshStoreResult } from '../deals';
 
 export interface WeekPlan {
   week: Week;
@@ -115,12 +120,16 @@ export interface AppData {
   recipeIngredients: RecipeIngredient[];
   recipeSteps: RecipeStep[];
   recipeTags: RecipeTag[];
+  recipeHistory: RatingEntry[];
   pantryItems: PantryItem[];
   stores: Store[];
   deals: Deal[];
   dealMatches: DealMatch[];
   aiRuns: AiRun[];
+  refreshingDeals: boolean;
+  lastDealRefresh: DealRefreshStoreResult[] | null;
   refresh: () => Promise<void>;
+  refreshDeals: () => Promise<DealRefreshStoreResult[]>;
   saveSettings: (patch: Partial<Settings>) => Promise<void>;
   saveAiState: (patch: Partial<AiState>) => Promise<void>;
   clearAiCredentials: () => Promise<void>;
@@ -136,13 +145,30 @@ export interface AppData {
   replaceRecipeIngredients: (recipeId: number, items: readonly RecipeIngredientDraft[]) => Promise<void>;
   replaceRecipeSteps: (recipeId: number, steps: readonly RecipeStepDraft[]) => Promise<void>;
   setPantryLevel: (ingredientId: number, level: PantryLevel) => Promise<void>;
+  importTicket: (text: string) => Promise<{
+    matched: { ingredientId: number; name: string; line: string }[];
+    unmatched: string[];
+  }>;
   removePantryItem: (ingredientId: number) => Promise<void>;
   setStoreEnabled: (id: number, enabled: boolean) => Promise<void>;
   setStoreOffersUrl: (id: number, url: string) => Promise<void>;
   setDealMatchStatus: (id: number, status: MatchStatus) => Promise<void>;
   recordAiRun: (input: Omit<AiRun, 'id' | 'uuid' | 'createdAt' | 'updatedAt'>) => Promise<number>;
   loadWeekPlan: (weekStartDate: string) => Promise<WeekPlan>;
-  setDayBudget: (weekId: number, day: WeekDay, mode: DayMode, cookMinutes: number) => Promise<void>;
+  setDayBudget: (
+    weekId: number,
+    day: WeekDay,
+    mode: DayMode,
+    cookMinutes: number,
+    servings: number | null
+  ) => Promise<void>;
+  setDayWish: (
+    weekId: number,
+    day: WeekDay,
+    recipeId: number | null,
+    freeText: string | null,
+    servings: number
+  ) => Promise<void>;
   createSlot: (input: SlotInput) => Promise<number>;
   updateSlot: (id: number, input: Omit<SlotInput, 'weekId'>) => Promise<void>;
   deleteSlot: (id: number) => Promise<void>;
@@ -168,11 +194,14 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const [recipeIngredients, setRecipeIngredients] = useState<RecipeIngredient[]>([]);
   const [recipeSteps, setRecipeSteps] = useState<RecipeStep[]>([]);
   const [recipeTags, setRecipeTags] = useState<RecipeTag[]>([]);
+  const [recipeHistory, setRecipeHistory] = useState<RatingEntry[]>([]);
   const [pantryItems, setPantryItems] = useState<PantryItem[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [dealMatches, setDealMatches] = useState<DealMatch[]>([]);
   const [aiRuns, setAiRuns] = useState<AiRun[]>([]);
+  const [refreshingDeals, setRefreshingDeals] = useState(false);
+  const [lastDealRefresh, setLastDealRefresh] = useState<DealRefreshStoreResult[] | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -186,6 +215,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         nextRecipeIngredients,
         nextRecipeSteps,
         nextRecipeTags,
+        nextRecipeHistory,
         nextPantryItems,
         nextStores,
         nextDeals,
@@ -200,6 +230,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         getAllRecipeIngredients(db),
         getAllRecipeSteps(db),
         getAllRecipeTags(db),
+        getRecipeHistory(db),
         getAllPantryItems(db),
         getAllStores(db),
         getAllDeals(db),
@@ -214,6 +245,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       setRecipeIngredients(nextRecipeIngredients);
       setRecipeSteps(nextRecipeSteps);
       setRecipeTags(nextRecipeTags);
+      setRecipeHistory(nextRecipeHistory);
       setPantryItems(nextPantryItems);
       setStores(nextStores);
       setDeals(nextDeals);
@@ -255,12 +287,27 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       recipeIngredients,
       recipeSteps,
       recipeTags,
+      recipeHistory,
       pantryItems,
       stores,
       deals,
       dealMatches,
       aiRuns,
+      refreshingDeals,
+      lastDealRefresh,
       refresh,
+      refreshDeals: async () => {
+        setRefreshingDeals(true);
+        try {
+          const db = await getDatabase();
+          const results = await refreshDealsFromStores({ db });
+          await refresh();
+          setLastDealRefresh(results);
+          return results;
+        } finally {
+          setRefreshingDeals(false);
+        }
+      },
       saveSettings: async (patch) => {
         setSettings(await withDb((db) => updateSettings(patch, db)));
       },
@@ -358,6 +405,28 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         await withDb((db) => setPantryLevel(ingredientId, level, db));
         await refresh();
       },
+      importTicket: async (text) => {
+        const lines = parseTicketText(text);
+        const matches = matchTicketLines(lines, ingredients);
+        const matched = matches.filter(
+          (match): match is typeof match & { ingredientId: number; ingredientName: string } =>
+            match.ingredientId !== null && match.ingredientName !== null
+        );
+        await withDb(async (db) => {
+          for (const match of matched) {
+            await setPantryLevel(match.ingredientId, 'stocked', db);
+          }
+        });
+        await refresh();
+        return {
+          matched: matched.map((match) => ({
+            ingredientId: match.ingredientId,
+            name: match.ingredientName,
+            line: match.line,
+          })),
+          unmatched: matches.filter((match) => match.ingredientId === null).map((match) => match.line),
+        };
+      },
       removePantryItem: async (ingredientId) => {
         await withDb((db) => deletePantryItem(ingredientId, db));
         await refresh();
@@ -385,17 +454,99 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
           ]);
           return { week, budgets, slots, shoppingItems };
         }),
-      setDayBudget: async (weekId, day, mode, cookMinutes) => {
-        await withDb((db) => upsertWeekDayBudget({ weekId, day, mode, cookMinutes }, db));
+      setDayBudget: async (weekId, day, mode, cookMinutes, servings) => {
+        await withDb(async (db) => {
+          await upsertWeekDayBudget({ weekId, day, mode, cookMinutes, servings }, db);
+          const slots = await getSlotsByWeek(weekId, db);
+          for (const slot of slots) {
+            if (slot.day !== day || slot.kind === 'empty') {
+              continue;
+            }
+            await updateSlotRow(
+              slot.id,
+              {
+                day: slot.day,
+                mealType: slot.mealType,
+                kind: slot.kind,
+                recipeId: slot.recipeId,
+                freeText: slot.freeText,
+                servings: servings ?? preferences.defaultServings,
+                note: slot.note,
+                pinned: slot.pinned,
+                sortOrder: slot.sortOrder,
+              },
+              db
+            );
+          }
+        });
       },
-      createSlot: async (input) => withDb((db) => createSlotRow(input, db)),
-      updateSlot: async (id, input) => withDb((db) => updateSlotRow(id, input, db)),
+      setDayWish: async (weekId, day, recipeId, freeText, servings) => {
+        await withDb(async (db) => {
+          const slots = await getSlotsByWeek(weekId, db);
+          const existing = slots.find(
+            (slot) => slot.day === day && slot.mealType === 'dinner' && slot.pinned
+          );
+          const text = freeText?.trim() || null;
+          if (recipeId === null && text === null) {
+            if (existing) {
+              await deleteSlotRow(existing.id, db);
+            }
+            return;
+          }
+          const kind = recipeId !== null ? 'recipe' : 'free_text';
+          const resolvedText = recipeId !== null ? null : text;
+          if (existing) {
+            await updateSlotRow(
+              existing.id,
+              {
+                day,
+                mealType: 'dinner',
+                kind,
+                recipeId,
+                freeText: resolvedText,
+                servings,
+                note: null,
+                pinned: true,
+                sortOrder: existing.sortOrder,
+              },
+              db
+            );
+            return;
+          }
+          await createSlotRow(
+            {
+              weekId,
+              day,
+              mealType: 'dinner',
+              kind,
+              recipeId,
+              freeText: resolvedText,
+              servings,
+              note: null,
+              pinned: true,
+              sortOrder: slots.length,
+            },
+            db
+          );
+        });
+      },
+      createSlot: async (input) => withDb((db) => createSlotRow(input, db)),      updateSlot: async (id, input) => withDb((db) => updateSlotRow(id, input, db)),
       deleteSlot: async (id) => withDb((db) => deleteSlotRow(id, db)),
       setSlotRating: async (id, rating) => withDb((db) => setSlotRatingRow(id, rating, db)),
       setWeekStatus: async (weekId, status) => withDb((db) => setWeekStatusRow(weekId, status, db)),
       regenerateShoppingList: async (weekId) =>
         withDb((db) =>
-          regenerateList(db, weekId, recipes, recipeIngredients, ingredients, pantryItems, deals, dealMatches)
+          regenerateList(
+            db,
+            weekId,
+            recipes,
+            recipeIngredients,
+            ingredients,
+            pantryItems,
+            deals,
+            dealMatches,
+            settings.currency
+          )
         ),
       loadShoppingItems: async (weekId) => withDb((db) => getShoppingItems(weekId, db)),
       setShoppingItemChecked: async (id, checked) =>
@@ -441,11 +592,14 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     recipeIngredients,
     recipeSteps,
     recipeTags,
+    recipeHistory,
     pantryItems,
     stores,
     deals,
     dealMatches,
     aiRuns,
+    refreshingDeals,
+    lastDealRefresh,
     refresh,
   ]);
 
@@ -468,7 +622,8 @@ async function regenerateList(
   ingredients: readonly Ingredient[],
   pantryItems: readonly PantryItem[],
   deals: readonly Deal[],
-  dealMatches: readonly DealMatch[]
+  dealMatches: readonly DealMatch[],
+  currency: Currency
 ): Promise<ShoppingItem[]> {
   const slots = await getSlotsByWeek(weekId, db);
   const recipeById = new Map(recipes.map((recipe) => [recipe.id, recipe]));
@@ -508,7 +663,7 @@ async function regenerateList(
     }
   }
   for (const ingredientId of wanted) {
-    const best = bestDealForIngredient(ingredientId, deals, dealMatches, today);
+    const best = bestDealForIngredient(ingredientId, deals, dealMatches, today, currency);
     if (best) {
       bestDeals.set(ingredientId, best);
     }
