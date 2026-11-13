@@ -157,6 +157,22 @@ export async function setSlotRating(
   );
 }
 
+export async function markSlotCooked(
+  id: number,
+  actual: string | null,
+  db?: SQLiteDatabase
+): Promise<void> {
+  const database = db ?? (await getDatabase());
+  await database.runAsync(
+    `UPDATE slots
+        SET cooked_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+            note = COALESCE(?, note),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id = ?`,
+    [actual, id]
+  );
+}
+
 export async function deleteSlot(id: number, db?: SQLiteDatabase): Promise<void> {
   const database = db ?? (await getDatabase());
   await database.runAsync(

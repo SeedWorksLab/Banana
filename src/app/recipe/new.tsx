@@ -85,6 +85,7 @@ export default function RecipeEditorScreen() {
         source: existing?.source ?? ('own'),
         isBuiltin: existing?.isBuiltin ?? false,
         isFavorite: existing?.isFavorite ?? false,
+        isWish: existing?.isWish ?? false,
         servings,
         prepMinutes,
         cookMinutes,

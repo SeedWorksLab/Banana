@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Button, Card, Chip, Divider, IconButton, Text } from 'react-native-paper';
@@ -6,6 +6,7 @@ import { Button, Card, Chip, Divider, IconButton, Text } from 'react-native-pape
 import { ScreenFade } from '../../components/screen-fade';
 import { KeyboardAwareScrollView } from '../../components/keyboard-aware-scroll-view';
 import { EmptyState } from '../../components/empty-state';
+import { ScreenToast } from '../../components/screen-toast';
 import { useAppData } from '../../data/DataProvider';
 import { pantryCoverage } from '../../services/pantry-service';
 import { totalMinutes } from '../../services/recipe-service';
@@ -23,11 +24,15 @@ export default function RecipeDetailScreen() {
     recipeTags,
     ingredients,
     pantryItems,
+    defaultHome,
+    addWishRecipeIngredients,
     saveRecipe,
     removeRecipe,
     replaceRecipeTags,
   } = useAppData();
 
+  const [showSteps, setShowSteps] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
   const recipe = recipes.find((candidate) => candidate.id === recipeId) ?? null;
 
   if (!recipe) {
@@ -43,7 +48,11 @@ export default function RecipeDetailScreen() {
   const requiredIngredientIds = rows
     .filter((row) => !row.optional)
     .map((row) => row.ingredientId);
-  const coverage = pantryCoverage(requiredIngredientIds, pantryItems);
+  const homePantry =
+    defaultHome === null
+      ? pantryItems
+      : pantryItems.filter((item) => item.homeId === defaultHome.id);
+  const coverage = pantryCoverage(requiredIngredientIds, homePantry);
   const tags = recipeTags.filter((tag) => tag.recipeId === recipe.id).map((tag) => tag.tag);
   const steps = recipeSteps
     .filter((step) => step.recipeId === recipe.id)
@@ -60,6 +69,7 @@ export default function RecipeDetailScreen() {
       source: recipe.source,
       isBuiltin: recipe.isBuiltin,
       isFavorite: !recipe.isFavorite,
+      isWish: recipe.isWish,
       servings: recipe.servings,
       prepMinutes: recipe.prepMinutes,
       cookMinutes: recipe.cookMinutes,
@@ -96,6 +106,11 @@ export default function RecipeDetailScreen() {
         <View style={styles.chips}>
           <Chip compact>{MEAL_TYPE_LABELS[recipe.category]}</Chip>
           <Chip compact>{recipe.servings} servings</Chip>
+          {recipe.isWish ? (
+            <Chip compact icon="star-outline">
+              Wish
+            </Chip>
+          ) : null}
           {requiredIngredientIds.length > 0 ? (
             <Chip
               compact
@@ -131,19 +146,49 @@ export default function RecipeDetailScreen() {
 
         <Card style={styles.card}>
           <Card.Content>
-            <Text variant="titleSmall">Steps</Text>
+            <View style={styles.headerRow}>
+              <Text variant="titleSmall" style={styles.grow}>
+                Steps
+              </Text>
+              <Button compact onPress={() => setShowSteps((value) => !value)}>
+                {showSteps ? 'Hide' : 'Show'}
+              </Button>
+            </View>
             <Divider style={styles.divider} />
-            {steps.length === 0 ? (
-              <Text variant="bodySmall">No steps yet</Text>
+            {showSteps ? (
+              steps.length === 0 ? (
+                <Text variant="bodySmall">No steps yet</Text>
+              ) : (
+                steps.map((step, index) => (
+                  <Text key={step.id} variant="bodyMedium" style={styles.line}>
+                    {index + 1}. {step.instruction}
+                  </Text>
+                ))
+              )
             ) : (
-              steps.map((step, index) => (
-                <Text key={step.id} variant="bodyMedium" style={styles.line}>
-                  {index + 1}. {step.instruction}
-                </Text>
-              ))
+              <Text variant="bodySmall">Open the steps only when you are cooking.</Text>
             )}
           </Card.Content>
         </Card>
+
+        {recipe.isWish && defaultHome ? (
+          <Button
+            mode="contained-tonal"
+            icon="cart-plus"
+            onPress={() =>
+              void addWishRecipeIngredients(recipe.id, defaultHome.id).then((count) => {
+                setToast(
+                  count === 0
+                    ? 'You already have everything for this wish'
+                    : `${count} missing ingredient${count === 1 ? '' : 's'} added to shopping`
+                );
+              })
+            }
+            accessibilityLabel="Add missing wish ingredients to the shopping list"
+          >
+            Add missing ingredients to shopping
+          </Button>
+        ) : null}
 
         <View style={styles.actions}>
           <Button
@@ -158,6 +203,7 @@ export default function RecipeDetailScreen() {
           </Button>
         </View>
       </KeyboardAwareScrollView>
+      <ScreenToast visible={toast !== null} message={toast} onDismiss={() => setToast(null)} />
     </ScreenFade>
   );
 }

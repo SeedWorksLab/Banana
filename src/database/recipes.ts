@@ -11,6 +11,7 @@ export interface RecipeInput {
   source: RecipeSource;
   isBuiltin: boolean;
   isFavorite: boolean;
+  isWish: boolean;
   servings: number;
   prepMinutes: number;
   cookMinutes: number;
@@ -26,6 +27,7 @@ interface RecipeRow {
   source: RecipeSource;
   is_builtin: number;
   is_favorite: number;
+  is_wish: number;
   servings: number;
   prep_minutes: number;
   cook_minutes: number;
@@ -51,6 +53,7 @@ function rowToRecipe(row: RecipeRow): Recipe {
     source: parseSource(row.source),
     isBuiltin: row.is_builtin === 1,
     isFavorite: row.is_favorite === 1,
+    isWish: row.is_wish === 1,
     servings: row.servings,
     prepMinutes: row.prep_minutes,
     cookMinutes: row.cook_minutes,
@@ -64,7 +67,7 @@ function rowToRecipe(row: RecipeRow): Recipe {
 }
 
 const SELECT = `SELECT id, uuid, name, description, category, source, is_builtin, is_favorite,
-                       servings, prep_minutes, cook_minutes, notes, active, sort_order,
+                       is_wish, servings, prep_minutes, cook_minutes, notes, active, sort_order,
                        created_at, updated_at, deleted
                   FROM recipes`;
 
@@ -86,9 +89,9 @@ export async function createRecipe(input: RecipeInput, db?: SQLiteDatabase): Pro
   const database = db ?? (await getDatabase());
   const result = await database.runAsync(
     `INSERT INTO recipes
-       (uuid, name, description, category, source, is_builtin, is_favorite, servings,
-        prep_minutes, cook_minutes, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (uuid, name, description, category, source, is_builtin, is_favorite, is_wish,
+        servings, prep_minutes, cook_minutes, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       newUuid(),
       input.name,
@@ -97,6 +100,7 @@ export async function createRecipe(input: RecipeInput, db?: SQLiteDatabase): Pro
       input.source,
       input.isBuiltin ? 1 : 0,
       input.isFavorite ? 1 : 0,
+      input.isWish ? 1 : 0,
       input.servings,
       input.prepMinutes,
       input.cookMinutes,
@@ -115,8 +119,8 @@ export async function updateRecipe(
   await database.runAsync(
     `UPDATE recipes
         SET name = ?, description = ?, category = ?, source = ?, is_builtin = ?,
-            is_favorite = ?, servings = ?, prep_minutes = ?, cook_minutes = ?, notes = ?,
-            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            is_favorite = ?, is_wish = ?, servings = ?, prep_minutes = ?, cook_minutes = ?,
+            notes = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE id = ?`,
     [
       input.name,
@@ -125,6 +129,7 @@ export async function updateRecipe(
       input.source,
       input.isBuiltin ? 1 : 0,
       input.isFavorite ? 1 : 0,
+      input.isWish ? 1 : 0,
       input.servings,
       input.prepMinutes,
       input.cookMinutes,

@@ -110,6 +110,11 @@ export async function getDeal(id: number, db?: SQLiteDatabase): Promise<Deal | n
   return row ? rowToDeal(row) : null;
 }
 
+export async function createDeal(input: DealInput, db?: SQLiteDatabase): Promise<number> {
+  const database = db ?? (await getDatabase());
+  return insertDeal(database, input);
+}
+
 async function insertDeal(database: SQLiteDatabase, input: DealInput): Promise<number> {
   const result = await database.runAsync(
     `INSERT INTO deals

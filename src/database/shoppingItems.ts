@@ -6,6 +6,7 @@ import { getDatabase } from './database';
 
 export interface ShoppingItemInput {
   weekId: number;
+  homeId: number | null;
   ingredientId: number | null;
   label: string;
   category: IngredientCategory;
@@ -13,6 +14,7 @@ export interface ShoppingItemInput {
   unit: Unit;
   checked: boolean;
   manual: boolean;
+  saleOnly: boolean;
   dealId: number | null;
   priceCents: number | null;
   sortOrder: number;
@@ -22,6 +24,7 @@ interface ShoppingItemRow {
   id: number;
   uuid: string | null;
   week_id: number;
+  home_id: number | null;
   ingredient_id: number | null;
   label: string;
   category: IngredientCategory;
@@ -29,6 +32,7 @@ interface ShoppingItemRow {
   unit: Unit;
   checked: number;
   manual: number;
+  sale_only: number;
   deal_id: number | null;
   price_cents: number | null;
   sort_order: number;
@@ -52,6 +56,7 @@ function rowToShoppingItem(row: ShoppingItemRow): ShoppingItem {
     id: row.id,
     uuid: row.uuid,
     weekId: row.week_id,
+    homeId: row.home_id,
     ingredientId: row.ingredient_id,
     label: row.label,
     category: parseCategory(row.category),
@@ -59,6 +64,7 @@ function rowToShoppingItem(row: ShoppingItemRow): ShoppingItem {
     unit: parseUnit(row.unit),
     checked: row.checked === 1,
     manual: row.manual === 1,
+    saleOnly: row.sale_only === 1,
     dealId: row.deal_id,
     priceCents: row.price_cents,
     sortOrder: row.sort_order,
@@ -68,8 +74,8 @@ function rowToShoppingItem(row: ShoppingItemRow): ShoppingItem {
   };
 }
 
-const SELECT = `SELECT id, uuid, week_id, ingredient_id, label, category, quantity, unit,
-                       checked, manual, deal_id, price_cents, sort_order,
+const SELECT = `SELECT id, uuid, week_id, home_id, ingredient_id, label, category, quantity,
+                       unit, checked, manual, sale_only, deal_id, price_cents, sort_order,
                        created_at, updated_at, deleted
                   FROM shopping_items`;
 
@@ -79,7 +85,8 @@ export async function getShoppingItems(
 ): Promise<ShoppingItem[]> {
   const database = db ?? (await getDatabase());
   const rows = await database.getAllAsync<ShoppingItemRow>(
-    `${SELECT} WHERE week_id = ? AND deleted = 0 ORDER BY category, sort_order, label`,
+    `${SELECT} WHERE week_id = ? AND deleted = 0
+      ORDER BY home_id, sale_only, category, sort_order, label`,
     [weekId]
   );
   return rows.map(rowToShoppingItem);
@@ -101,12 +108,13 @@ export async function createShoppingItem(
   const database = db ?? (await getDatabase());
   const result = await database.runAsync(
     `INSERT INTO shopping_items
-       (uuid, week_id, ingredient_id, label, category, quantity, unit, checked, manual,
-        deal_id, price_cents, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (uuid, week_id, home_id, ingredient_id, label, category, quantity, unit, checked,
+        manual, sale_only, deal_id, price_cents, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       newUuid(),
       input.weekId,
+      input.homeId,
       input.ingredientId,
       input.label,
       input.category,
@@ -114,6 +122,7 @@ export async function createShoppingItem(
       input.unit,
       input.checked ? 1 : 0,
       input.manual ? 1 : 0,
+      input.saleOnly ? 1 : 0,
       input.dealId,
       input.priceCents,
       input.sortOrder,
@@ -130,17 +139,19 @@ export async function updateShoppingItem(
   const database = db ?? (await getDatabase());
   await database.runAsync(
     `UPDATE shopping_items
-        SET ingredient_id = ?, label = ?, category = ?, quantity = ?, unit = ?, checked = ?,
-            deal_id = ?, price_cents = ?, sort_order = ?,
+        SET home_id = ?, ingredient_id = ?, label = ?, category = ?, quantity = ?, unit = ?,
+            checked = ?, sale_only = ?, deal_id = ?, price_cents = ?, sort_order = ?,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE id = ?`,
     [
+      input.homeId,
       input.ingredientId,
       input.label,
       input.category,
       input.quantity,
       input.unit,
       input.checked ? 1 : 0,
+      input.saleOnly ? 1 : 0,
       input.dealId,
       input.priceCents,
       input.sortOrder,
@@ -207,4 +218,23 @@ export async function clearGeneratedShoppingItems(
       WHERE week_id = ? AND manual = 0`,
     [weekId]
   );
+}
+
+export async function reorderShoppingItems(
+  orderedIds: readonly number[],
+  db?: SQLiteDatabase
+): Promise<void> {
+  const database = db ?? (await getDatabase());
+  await database.withTransactionAsync(async () => {
+    let order = 0;
+    for (const id of orderedIds) {
+      await database.runAsync(
+        `UPDATE shopping_items
+            SET sort_order = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE id = ?`,
+        [order, id]
+      );
+      order += 1;
+    }
+  });
 }

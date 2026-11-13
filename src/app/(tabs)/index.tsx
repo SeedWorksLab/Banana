@@ -1,7 +1,8 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { Button, Card, Chip, Divider, IconButton, List, SegmentedButtons, Text, TextInput } from 'react-native-paper';
+import { Button, Card, Chip, Divider, FAB, IconButton, List, SegmentedButtons, Text, TextInput } from 'react-native-paper';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 
 import { ScreenFade } from '../../components/screen-fade';
 import { KeyboardAwareScrollView } from '../../components/keyboard-aware-scroll-view';
@@ -36,6 +37,7 @@ import { buildDayPlans, weekProgress, weekRange } from '../../services/week-serv
 import { formatCents } from '../../utils/currency';
 import { addDays, formatDate, todayDate, weekStart } from '../../utils/date';
 import { DAY_MODE_LABELS, weekDayLabel } from '../../utils/labels';
+import { expiringIngredients, soonLabel } from '../../services/expiry-service';
 
 const DAY_MODE_OPTIONS = DAY_MODES.map((mode) => ({
   value: mode,
@@ -54,8 +56,11 @@ export default function PlanScreen() {
     recipeHistory,
     ingredients,
     pantryItems,
+    homes,
+    defaultHome,
     deals,
     dealMatches,
+    applyPlanInstruction,
     createSlot,
     deleteSlot,
     setDayBudget,
@@ -80,6 +85,12 @@ export default function PlanScreen() {
   const [editWishText, setEditWishText] = useState('');
   const [dictating, setDictating] = useState(false);
   const dictationRef = useRef<LiveTranscriptionHandle | null>(null);
+  const [editHomeId, setEditHomeId] = useState<number | null>(null);
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentText, setAgentText] = useState('');
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [agentDictating, setAgentDictating] = useState(false);
+  const agentDictationRef = useRef<LiveTranscriptionHandle | null>(null);
 
   const load = useCallback(async () => {
     const next = await loadWeekPlan(weekStartDate);
@@ -190,6 +201,32 @@ export default function PlanScreen() {
       label: recipe.name,
     })),
     [recipes]
+  );
+  const homeByDay = useMemo(
+    () => new Map((plan?.budgets ?? []).map((budget) => [budget.day, budget.homeId])),
+    [plan]
+  );
+  const homeNameById = useMemo(
+    () => new Map(homes.map((home) => [home.id, home.name])),
+    [homes]
+  );
+  const homeOptions = useMemo(
+    () => homes.map((home) => ({ value: home.id, label: home.name })),
+    [homes]
+  );
+  const activeHomeId = defaultHome?.id ?? homes[0]?.id ?? null;
+  const useSoon = useMemo(
+    () =>
+      expiringIngredients(
+        pantryItems.filter((item) => activeHomeId === null || item.homeId === activeHomeId),
+        todayDate(),
+        3
+      ),
+    [pantryItems, activeHomeId]
+  );
+  const ingredientNameById = useMemo(
+    () => new Map(ingredients.map((ingredient) => [ingredient.id, ingredient.name])),
+    [ingredients]
   );
   const wishByDay = useMemo(() => {
     const map = new Map<WeekDay, { recipeId: number | null; freeText: string | null }>();
@@ -318,9 +355,10 @@ export default function PlanScreen() {
     setEditMode(day.mode);
     setEditMinutes(day.cookMinutes);
     setEditServings(day.servings);
+    setEditHomeId(homeByDay.get(day.day) ?? activeHomeId);
     setEditWishRecipeId(wish?.recipeId ?? null);
     setEditWishText(wish?.freeText ?? '');
-  }, []);
+  }, [homeByDay, activeHomeId]);
 
   const handleSaveDay = useCallback(async () => {
     if (!plan || editingDay === null || editMinutes === null || editServings === null) {
@@ -331,7 +369,7 @@ export default function PlanScreen() {
     setDictating(false);
     setBusy(true);
     try {
-      await setDayBudget(plan.week.id, editingDay, editMode, editMinutes, editServings);
+      await setDayBudget(plan.week.id, editingDay, editMode, editMinutes, editServings, editHomeId);
       await setDayWish(
         plan.week.id,
         editingDay,
@@ -344,7 +382,7 @@ export default function PlanScreen() {
       setBusy(false);
       setEditingDay(null);
     }
-  }, [plan, editingDay, editMode, editMinutes, editServings, editWishRecipeId, editWishText, setDayBudget, setDayWish, load]);
+  }, [plan, editingDay, editMode, editMinutes, editServings, editHomeId, editWishRecipeId, editWishText, setDayBudget, setDayWish, load]);
 
   const closeDayEditor = useCallback(() => {
     dictationRef.current?.abort();
@@ -397,10 +435,81 @@ export default function PlanScreen() {
     setDictating(true);
   }, [dictating, recipes, stopDictation]);
 
+  const hasMeals = (plan?.slots ?? []).some((slot) => slot.kind !== 'empty');
+
+  const sendAgentInstruction = useCallback(
+    async (text: string) => {
+      if (!plan || text.trim() === '') {
+        return;
+      }
+      setAgentBusy(true);
+      try {
+        const outcome = await applyPlanInstruction(plan.week.id, text.trim());
+        setAgentText('');
+        setAgentOpen(false);
+        await load();
+        setToast(outcome.message);
+      } catch (caught) {
+        setToast(caught instanceof Error ? caught.message : 'Could not update the plan');
+      } finally {
+        setAgentBusy(false);
+      }
+    },
+    [plan, applyPlanInstruction, load]
+  );
+
+  const startAgentDictation = useCallback(async () => {
+    if (agentDictating || agentBusy) {
+      return;
+    }
+    if (!isSpeechRecognitionAvailable()) {
+      setToast('Speech recognition is not available on this device');
+      return;
+    }
+    const granted = await requestSpeechRecognitionPermission();
+    if (!granted) {
+      setToast('Microphone permission is needed to talk');
+      return;
+    }
+    agentDictationRef.current = startLiveTranscription({
+      language: 'en',
+      contextualStrings: recipes.map((recipe) => recipe.name),
+      onError: (message) => {
+        setToast(message);
+        setAgentDictating(false);
+        agentDictationRef.current = null;
+      },
+    });
+    setAgentDictating(true);
+  }, [agentDictating, agentBusy, recipes]);
+
+  const stopAgentDictation = useCallback(
+    async (apply: boolean) => {
+      const handle = agentDictationRef.current;
+      agentDictationRef.current = null;
+      setAgentDictating(false);
+      if (!handle) {
+        return;
+      }
+      if (!apply) {
+        handle.abort();
+        return;
+      }
+      const result = await handle.stop();
+      const text = result?.text?.trim();
+      if (text) {
+        setAgentText(text);
+        await sendAgentInstruction(text);
+      }
+    },
+    [sendAgentInstruction]
+  );
+
   const range = weekRange(weekStartDate);
 
   return (
     <ScreenFade>
+      <View style={styles.container}>
       <KeyboardAwareScrollView contentContainerStyle={styles.content}>
         <View style={styles.weekHeader}>
           <View style={styles.weekTitle}>
@@ -463,6 +572,29 @@ export default function PlanScreen() {
           </Button>
         </View>
 
+        {useSoon.length > 0 ? (
+          <Card style={styles.card}>
+            <Card.Title
+              title="Use soon"
+              subtitle={`At ${defaultHome?.name ?? 'your home'}`}
+              left={(props) => <List.Icon {...props} icon="clock-alert-outline" />}
+            />
+            <Card.Content>
+              <View style={[styles.expiryRow, { gap: theme.spacing[1] }]}>
+                {useSoon.map((item) => (
+                  <Chip
+                    key={`${item.ingredientId}-${item.expiresOn}`}
+                    compact
+                    icon="leaf"
+                  >
+                    {ingredientNameById.get(item.ingredientId) ?? 'Ingredient'} · {soonLabel(item.daysLeft)}
+                  </Chip>
+                ))}
+              </View>
+            </Card.Content>
+          </Card>
+        ) : null}
+
         {discoverySuggestions.length > 0 ? (
           <Card style={styles.card}>
             <Card.Title
@@ -487,8 +619,8 @@ export default function PlanScreen() {
 
         {!plan ? (
           <EmptyState message="Loading this week..." />
-        ) : dayPlans.length === 0 ? (
-          <EmptyState message="Nothing planned yet" actionLabel="Plan the week" onAction={handlePlanWeek} />
+        ) : !hasMeals ? (
+          <EmptyState message="This week is empty" actionLabel="Plan the week" onAction={handlePlanWeek} />
         ) : (
           dayPlans.map((day) => {
             const slots = plan.slots.filter((slot) => slot.day === day.day);
@@ -507,6 +639,11 @@ export default function PlanScreen() {
                       <Chip compact icon="account-multiple">
                         {day.servings}
                       </Chip>
+                      {homeNameById.get(homeByDay.get(day.day) ?? activeHomeId) ? (
+                        <Chip compact icon="home-outline">
+                          {homeNameById.get(homeByDay.get(day.day) ?? activeHomeId)}
+                        </Chip>
+                      ) : null}
                       <IconButton
                         icon="tune"
                         size={18}
@@ -542,6 +679,66 @@ export default function PlanScreen() {
           })
         )}
       </KeyboardAwareScrollView>
+      <FAB
+        icon="message-text-outline"
+        style={styles.fab}
+        onPress={() => setAgentOpen(true)}
+        accessibilityLabel="Ask Banana to change the plan"
+      />
+      </View>
+      <AppDialog visible={agentOpen} onDismiss={() => setAgentOpen(false)}>
+        <AppDialog.Title>Change the plan</AppDialog.Title>
+        <AppDialog.Content>
+          <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+            Say what changed. Banana changes only what it has to.
+          </Text>
+          <TextInput
+            label="Message"
+            mode="outlined"
+            multiline
+            value={agentText}
+            onChangeText={setAgentText}
+            style={{ marginTop: theme.spacing[3] }}
+          />
+          <Pressable
+            onPressIn={() => void startAgentDictation()}
+            onPressOut={() => void stopAgentDictation(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Hold to talk to Banana"
+            accessibilityState={{ busy: agentDictating, disabled: agentBusy }}
+            style={({ pressed }) => [
+              styles.talkButton,
+              {
+                backgroundColor:
+                  pressed || agentDictating
+                    ? theme.colors.primaryContainer
+                    : theme.colors.surfaceVariant,
+                borderRadius: theme.radii.pill,
+                marginTop: theme.spacing[3],
+              },
+            ]}
+          >
+            <MaterialCommunityIcons
+              name={agentDictating ? 'stop-circle-outline' : 'microphone'}
+              size={22}
+              color={theme.colors.onSurfaceVariant}
+            />
+            <Text variant="labelLarge">
+              {agentDictating ? 'Listening… release to send' : 'Hold to talk'}
+            </Text>
+          </Pressable>
+        </AppDialog.Content>
+        <AppDialog.Actions>
+          <Button onPress={() => setAgentOpen(false)}>Cancel</Button>
+          <Button
+            loading={agentBusy}
+            disabled={agentBusy || agentText.trim() === ''}
+            onPress={() => void sendAgentInstruction(agentText)}
+          >
+            Send
+          </Button>
+        </AppDialog.Actions>
+      </AppDialog>
       <AppDialog visible={editingDay !== null} onDismiss={closeDayEditor}>
         <AppDialog.Title>
           {editingDay !== null ? weekDayLabel(editingDay) : 'Day'}
@@ -565,6 +762,13 @@ export default function PlanScreen() {
             value={editServings}
             integer
             onChange={setEditServings}
+          />
+          <OptionField
+            label="Where"
+            value={editHomeId}
+            options={homeOptions}
+            emptyLabel="Main home"
+            onChange={setEditHomeId}
           />
           <View style={{ marginTop: theme.spacing[2] }}>
             <OptionField
@@ -624,6 +828,26 @@ export default function PlanScreen() {
 }
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  expiryRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  talkButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  fab: {
+    position: 'absolute',
+    right: 16,
+    bottom: 16,
+  },
   content: {
     padding: 16,
     gap: 12,

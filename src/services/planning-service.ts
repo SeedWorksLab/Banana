@@ -17,6 +17,8 @@ export interface PlannerDay {
   mode: 'cook' | 'no_cook' | 'leftovers';
   cookMinutes: number;
   servings?: number;
+  homeId?: number | null;
+  expiringIngredientIds?: readonly number[];
 }
 
 export interface PinnedWish {
@@ -125,6 +127,12 @@ export function scoreRecipe(
   const stocked = recipe.stockedIngredientIds?.length ?? 0;
   if (stocked > 0) {
     score += Math.min(stocked, 5) * 5;
+  }
+
+  const expiring = new Set(day.expiringIngredientIds ?? []);
+  const expiringUsed = ingredientIds.filter((id) => expiring.has(id)).length;
+  if (expiringUsed > 0) {
+    score += Math.min(expiringUsed, 5) * 8;
   }
 
   return score;

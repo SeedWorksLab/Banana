@@ -6,10 +6,12 @@ import { Card, Divider, List, Switch, Text, TextInput } from 'react-native-paper
 import { ScreenFade } from '../../components/screen-fade';
 import { KeyboardAwareScrollView } from '../../components/keyboard-aware-scroll-view';
 import { NumberField } from '../../components/number-field';
+import { ScreenToast } from '../../components/screen-toast';
 import { OptionField } from '../../components/option-field';
 import { useAppData } from '../../data/DataProvider';
 import { COUNTRIES, CURRENCIES, DIETS, THEME_MODES } from '../../models';
 import { isStoreSupported } from '../../deals/providers';
+import { requestNotificationPermission } from '../../services/notifications';
 import { COUNTRY_LABELS, DIET_LABELS } from '../../utils/labels';
 import {
   CURRENCY_LABELS,
@@ -48,6 +50,19 @@ export default function SettingsScreen() {
   } = useAppData();
   const [allergiesText, setAllergiesText] = useState(() => preferences.allergies.join(', '));
   const [dislikesText, setDislikesText] = useState(() => preferences.dislikes.join(', '));
+  const [toast, setToast] = useState<string | null>(null);
+
+  async function toggleNotifications(value: boolean) {
+    if (value) {
+      const granted = await requestNotificationPermission();
+      if (!granted) {
+        setToast('Notifications are blocked in the system settings');
+        await saveSettings({ notificationsEnabled: false });
+        return;
+      }
+    }
+    await saveSettings({ notificationsEnabled: value });
+  }
 
   return (
     <ScreenFade>
@@ -111,6 +126,26 @@ export default function SettingsScreen() {
               <Switch
                 value={settings.dinnerOnly}
                 onValueChange={(value) => void saveSettings({ dinnerOnly: value })}
+              />
+            </View>
+          </Card.Content>
+        </Card>
+
+        <Card>
+          <Card.Content>
+            <Text variant="titleMedium">Reminders</Text>
+            <View style={styles.switchRow}>
+              <View style={styles.flex}>
+                <Text variant="bodyLarge">Plan updates</Text>
+                <Text variant="bodySmall">
+                  A quiet notification when Banana changes your plan.
+                </Text>
+              </View>
+              <Switch
+                value={settings.notificationsEnabled}
+                onValueChange={(value) => void toggleNotifications(value)}
+                accessibilityLabel="Notify me when the plan changes"
+                accessibilityState={{ checked: settings.notificationsEnabled }}
               />
             </View>
           </Card.Content>
@@ -195,6 +230,14 @@ export default function SettingsScreen() {
 
         <Card>
           <List.Item
+            title="Pantry and homes"
+            description="What is in each home and use-by dates"
+            left={(props) => <List.Icon {...props} icon="fridge-outline" />}
+            right={(props) => <List.Icon {...props} icon="chevron-right" />}
+            onPress={() => router.push('/pantry')}
+          />
+          <Divider />
+          <List.Item
             title="AI provider"
             description="Endpoint, key and model"
             left={(props) => <List.Icon {...props} icon="robot-outline" />}
@@ -231,6 +274,7 @@ export default function SettingsScreen() {
           />
         </Card>
       </KeyboardAwareScrollView>
+      <ScreenToast visible={toast !== null} message={toast} onDismiss={() => setToast(null)} />
     </ScreenFade>
   );
 }
@@ -245,5 +289,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginTop: 8,
+    gap: 12,
+  },
+  flex: {
+    flex: 1,
   },
 });

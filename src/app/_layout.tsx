@@ -27,6 +27,7 @@ function ThemedContent() {
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="recipe/new" options={{ title: 'New recipe' }} />
           <Stack.Screen name="recipe/[id]" options={{ title: 'Recipe' }} />
+          <Stack.Screen name="pantry" options={{ title: 'Pantry and homes' }} />
           <Stack.Screen name="ai-provider" options={{ title: 'AI provider' }} />
           <Stack.Screen name="backup" options={{ title: 'Backup and restore' }} />
           <Stack.Screen name="tutorial" options={{ headerShown: false }} />

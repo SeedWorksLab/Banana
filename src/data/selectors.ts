@@ -6,6 +6,7 @@ import type {
   RecipeStep,
   RecipeTag,
   Slot,
+  WeekDayBudget,
 } from '../models';
 import type { RecipeSummary } from '../services/recipe-service';
 import type { PlannerRecipe } from '../services/planning-service';
@@ -128,10 +129,13 @@ export function buildPlannedMeals(
   slots: readonly Slot[],
   recipes: readonly Recipe[],
   recipeIngredients: readonly RecipeIngredient[],
-  ingredients: readonly Ingredient[]
+  ingredients: readonly Ingredient[],
+  budgets: readonly WeekDayBudget[] = [],
+  defaultHomeId: number | null = null
 ): PlannedMeal[] {
   const recipeById = new Map(recipes.map((recipe) => [recipe.id, recipe]));
   const ingredientById = new Map(ingredients.map((ingredient) => [ingredient.id, ingredient]));
+  const homeByDay = new Map(budgets.map((budget) => [budget.day, budget.homeId]));
   const meals: PlannedMeal[] = [];
   for (const slot of slots) {
     if (slot.kind !== 'recipe' || slot.recipeId === null) {
@@ -140,6 +144,7 @@ export function buildPlannedMeals(
     const recipe = recipeById.get(slot.recipeId);
     meals.push({
       slotId: slot.id,
+      homeId: homeByDay.get(slot.day) ?? defaultHomeId,
       servings: slot.servings,
       recipeServings: recipe?.servings ?? slot.servings,
       ingredients: recipeIngredients

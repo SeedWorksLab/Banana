@@ -9,6 +9,7 @@ export interface IngredientInput {
   defaultUnit: Unit;
   defaultQuantity: number | null;
   isPantryStaple: boolean;
+  shelfLifeDays: number | null;
   notes: string | null;
 }
 
@@ -20,6 +21,7 @@ interface IngredientRow {
   default_unit: Unit;
   default_quantity: number | null;
   is_pantry_staple: number;
+  shelf_life_days: number | null;
   notes: string | null;
   active: number;
   sort_order: number;
@@ -37,6 +39,7 @@ function rowToIngredient(row: IngredientRow): Ingredient {
     defaultUnit: row.default_unit,
     defaultQuantity: row.default_quantity,
     isPantryStaple: row.is_pantry_staple === 1,
+    shelfLifeDays: row.shelf_life_days,
     notes: row.notes,
     active: row.active === 1,
     sortOrder: row.sort_order,
@@ -47,7 +50,8 @@ function rowToIngredient(row: IngredientRow): Ingredient {
 }
 
 const SELECT = `SELECT id, uuid, name, category, default_unit, default_quantity,
-                       is_pantry_staple, notes, active, sort_order, created_at, updated_at, deleted
+                       is_pantry_staple, shelf_life_days, notes, active, sort_order,
+                       created_at, updated_at, deleted
                   FROM ingredients`;
 
 export async function getAllIngredients(db?: SQLiteDatabase): Promise<Ingredient[]> {
@@ -83,8 +87,9 @@ export async function createIngredient(
   const database = db ?? (await getDatabase());
   const result = await database.runAsync(
     `INSERT INTO ingredients
-       (uuid, name, category, default_unit, default_quantity, is_pantry_staple, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (uuid, name, category, default_unit, default_quantity, is_pantry_staple,
+        shelf_life_days, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       newUuid(),
       input.name,
@@ -92,6 +97,7 @@ export async function createIngredient(
       input.defaultUnit,
       input.defaultQuantity,
       input.isPantryStaple ? 1 : 0,
+      input.shelfLifeDays,
       input.notes,
     ]
   );
@@ -107,7 +113,7 @@ export async function updateIngredient(
   await database.runAsync(
     `UPDATE ingredients
         SET name = ?, category = ?, default_unit = ?, default_quantity = ?,
-            is_pantry_staple = ?, notes = ?,
+            is_pantry_staple = ?, shelf_life_days = ?, notes = ?,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE id = ?`,
     [
@@ -116,6 +122,7 @@ export async function updateIngredient(
       input.defaultUnit,
       input.defaultQuantity,
       input.isPantryStaple ? 1 : 0,
+      input.shelfLifeDays,
       input.notes,
       id,
     ]

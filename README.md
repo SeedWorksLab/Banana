@@ -1,6 +1,12 @@
 # Banana
 
 <p align="center">
+  <a href="https://seedworkslab.github.io/apps/banana/">
+    <img src="https://seedworkslab.github.io/assets/readme/download-banana.svg" alt="Download Banana" width="340">
+  </a>
+</p>
+
+<p align="center">
   <img src="assets/banana-banner.jpg" alt="Banana — a private, local-first meal planner" width="640">
 </p>
 

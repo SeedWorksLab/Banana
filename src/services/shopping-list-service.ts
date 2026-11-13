@@ -12,6 +12,7 @@ export interface PlannedIngredient {
 
 export interface PlannedMeal {
   slotId: number;
+  homeId: number | null;
   servings: number;
   recipeServings: number;
   ingredients: PlannedIngredient[];
@@ -19,6 +20,7 @@ export interface PlannedMeal {
 
 export interface ShoppingLine {
   ingredientId: number | null;
+  homeId: number | null;
   label: string;
   category: IngredientCategory;
   quantity: number;
@@ -78,6 +80,7 @@ type Dimension = 'mass' | 'volume' | 'count';
 
 interface Accumulator {
   ingredientId: number;
+  homeId: number | null;
   label: string;
   category: IngredientCategory;
   dimension: Dimension;
@@ -123,14 +126,15 @@ export function aggregateIngredients(meals: readonly PlannedMeal[]): Accumulator
       const dimension = dimensionOf(ingredient.unit);
       const key =
         dimension === 'count'
-          ? `${ingredient.ingredientId}|u:${ingredient.unit}`
-          : `${ingredient.ingredientId}|${dimension}`;
+          ? `${meal.homeId ?? 'default'}|${ingredient.ingredientId}|u:${ingredient.unit}`
+          : `${meal.homeId ?? 'default'}|${ingredient.ingredientId}|${dimension}`;
       const existing = accumulators.get(key);
       if (existing) {
         existing.baseQuantity += toBase(ingredient.quantity * scale, ingredient.unit);
       } else {
         accumulators.set(key, {
           ingredientId: ingredient.ingredientId,
+          homeId: meal.homeId,
           label: ingredient.name,
           category: ingredient.category,
           dimension,
@@ -151,7 +155,12 @@ export function buildShoppingList(input: ShoppingListInput): ShoppingList {
   const lines: ShoppingLine[] = [];
   for (const accumulator of accums) {
     const display = displayUnit(accumulator);
-    const pantryItem = pantryItems.find((p) => p.ingredientId === accumulator.ingredientId) ?? null;
+    const pantryItem =
+      pantryItems.find(
+        (p) =>
+          p.ingredientId === accumulator.ingredientId &&
+          (accumulator.homeId === null || p.homeId === undefined || p.homeId === accumulator.homeId)
+      ) ?? null;
     const remaining = shortage(display, pantryItem);
     if (remaining === null) {
       continue;
@@ -159,6 +168,7 @@ export function buildShoppingList(input: ShoppingListInput): ShoppingList {
     const best = bestDeals.get(accumulator.ingredientId);
     lines.push({
       ingredientId: accumulator.ingredientId,
+      homeId: accumulator.homeId,
       label: accumulator.label,
       category: accumulator.category,
       quantity: Math.round(remaining.quantity * 1000) / 1000,
@@ -175,6 +185,10 @@ export function buildShoppingList(input: ShoppingListInput): ShoppingList {
 
 export function finalizeShoppingList(lines: readonly ShoppingLine[]): ShoppingList {
   const sorted = [...lines].sort((a, b) => {
+    const byHome = (a.homeId ?? -1) - (b.homeId ?? -1);
+    if (byHome !== 0) {
+      return byHome;
+    }
     const byAisle = aisleOrder(a.category) - aisleOrder(b.category);
     return byAisle !== 0 ? byAisle : a.label.localeCompare(b.label);
   });

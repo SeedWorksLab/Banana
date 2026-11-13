@@ -111,7 +111,14 @@ export type MatchStatus = (typeof MATCH_STATUSES)[number];
 export const SCRAPE_RUN_STATUSES = ['pending', 'succeeded', 'partial', 'failed'] as const;
 export type ScrapeRunStatus = (typeof SCRAPE_RUN_STATUSES)[number];
 
-export const AI_RUN_KINDS = ['plan_proposal', 'gap_fill', 'narrative'] as const;
+export const AI_RUN_KINDS = [
+  'plan_proposal',
+  'gap_fill',
+  'narrative',
+  'plan_edit',
+  'recipe_extract',
+  'newspaper',
+] as const;
 export type AiRunKind = (typeof AI_RUN_KINDS)[number];
 
 export const AI_RUN_STATUSES = ['pending', 'succeeded', 'failed'] as const;
@@ -161,6 +168,16 @@ export interface Preferences {
   householdName: string | null;
 }
 
+export interface Home {
+  id: number;
+  uuid: string | null;
+  name: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string | null;
+  deleted: boolean;
+}
+
 export interface Ingredient {
   id: number;
   uuid: string | null;
@@ -169,6 +186,7 @@ export interface Ingredient {
   defaultUnit: Unit;
   defaultQuantity: number | null;
   isPantryStaple: boolean;
+  shelfLifeDays: number | null;
   notes: string | null;
   active: boolean;
   sortOrder: number;
@@ -212,6 +230,7 @@ export interface Recipe {
   source: RecipeSource;
   isBuiltin: boolean;
   isFavorite: boolean;
+  isWish: boolean;
   servings: number;
   prepMinutes: number;
   cookMinutes: number;
@@ -261,9 +280,11 @@ export interface PantryItem {
   id: number;
   uuid: string | null;
   ingredientId: number;
+  homeId: number;
   level: PantryLevel;
   quantity: number | null;
   unit: Unit | null;
+  expiresOn: string | null;
   createdAt: string;
   updatedAt: string | null;
   deleted: boolean;
@@ -288,6 +309,7 @@ export interface WeekDayBudget {
   mode: DayMode;
   cookMinutes: number;
   servings: number | null;
+  homeId: number | null;
   createdAt: string;
   updatedAt: string | null;
 }
@@ -329,6 +351,7 @@ export interface ShoppingItem {
   id: number;
   uuid: string | null;
   weekId: number;
+  homeId: number | null;
   ingredientId: number | null;
   label: string;
   category: IngredientCategory;
@@ -336,6 +359,7 @@ export interface ShoppingItem {
   unit: Unit;
   checked: boolean;
   manual: boolean;
+  saleOnly: boolean;
   dealId: number | null;
   priceCents: number | null;
   sortOrder: number;

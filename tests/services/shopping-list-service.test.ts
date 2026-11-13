@@ -25,6 +25,7 @@ function ing(partial: Partial<PlannedIngredient>): PlannedIngredient {
 function meal(partial: Partial<PlannedMeal>): PlannedMeal {
   return {
     slotId: partial.slotId ?? 1,
+    homeId: partial.homeId ?? null,
     servings: partial.servings ?? 2,
     recipeServings: partial.recipeServings ?? 2,
     ingredients: partial.ingredients ?? [],
@@ -160,6 +161,7 @@ describe('aisle routing', () => {
   function line(partial: Partial<ShoppingLine>): ShoppingLine {
     return {
       ingredientId: partial.ingredientId ?? null,
+      homeId: partial.homeId ?? null,
       label: partial.label ?? 'Item',
       category: partial.category ?? 'other',
       quantity: partial.quantity ?? 1,
@@ -210,6 +212,7 @@ describe('addManualItem', () => {
     });
     const next = addManualItem(list, {
       ingredientId: null,
+      homeId: null,
       label: 'Kitchen roll',
       category: 'household',
       quantity: 1,

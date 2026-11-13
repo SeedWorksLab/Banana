@@ -3,6 +3,7 @@ import { convert } from '../utils/units';
 
 export interface PantryLookupItem {
   ingredientId: number;
+  homeId?: number;
   level: PantryLevel;
   quantity: number | null;
   unit: Unit | null;
