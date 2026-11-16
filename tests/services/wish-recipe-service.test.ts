@@ -30,19 +30,19 @@ describe('wish recipe shopping lines', () => {
     expect(lines.map((line) => line.ingredientId)).toEqual([1]);
   });
 
-  it('treats low and unknown stock as missing', () => {
+  it('subtracts known amounts even when their rough stock level is low', () => {
     const lines = wishRecipeShoppingLines(
       [
         { ingredientId: 1, name: 'Milk', category: 'dairy', quantity: 1, unit: 'l', optional: false },
         { ingredientId: 2, name: 'Cocoa', category: 'pantry', quantity: 50, unit: 'g', optional: false },
       ],
       [
-        { ingredientId: 1, homeId: 1, level: 'low', quantity: 1, unit: 'l' },
+        { ingredientId: 1, homeId: 1, level: 'low', quantity: 250, unit: 'ml' },
         { ingredientId: 2, homeId: 1, level: 'stocked', quantity: 50, unit: 'g' },
       ]
     );
     expect(lines).toEqual([
-      { ingredientId: 1, label: 'Milk', category: 'dairy', quantity: 1, unit: 'l' },
+      { ingredientId: 1, label: 'Milk', category: 'dairy', quantity: 0.75, unit: 'l' },
     ]);
   });
 });

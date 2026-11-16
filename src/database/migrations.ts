@@ -1,12 +1,14 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { SCHEMA_SQL, SEED_STORES_SQL, storesTableSql } from './schema';
+import { SYNC_TABLES, syncTriggersSql } from '../sync/tables';
+import { saveShoppingCheck } from './shoppingChecks';
 
 export interface Migration {
   id: number;
   description: string;
   sql: string;
-  apply?: (db: SQLiteDatabase) => Promise<void>;
+  apply?: (db: SQLiteDatabase, previousVersion: number) => Promise<void>;
 }
 
 async function ensureColumn(
@@ -173,6 +175,104 @@ DROP TABLE ai_runs;
 ALTER TABLE ai_runs_new RENAME TO ai_runs;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_runs_uuid ON ai_runs (uuid);
 CREATE INDEX IF NOT EXISTS idx_ai_runs_week ON ai_runs (week_id, created_at);
+`,
+  },
+  {
+    id: 8,
+    description: 'Adopt existing installs before the first-launch welcome flow',
+    sql: '',
+    apply: async (db, previousVersion) => {
+      if (previousVersion > 0) {
+        await db.runAsync(
+          `INSERT INTO settings (key, value, updated_at)
+           VALUES ('welcome_seen', '1', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+           ON CONFLICT (key) DO NOTHING`
+        );
+        await db.runAsync(
+          `INSERT INTO settings (key, value, updated_at)
+           VALUES ('tutorial_seen', '1', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+           ON CONFLICT (key) DO NOTHING`
+        );
+      }
+    },
+  },
+  {
+    id: 9,
+    description: 'Add opt-in SeedWorks change capture and stable shopping check records',
+    sql: `
+ALTER TABLE preferences ADD COLUMN uuid TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_preferences_uuid ON preferences (uuid);
+
+CREATE TABLE IF NOT EXISTS sync_state (
+  id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+  enabled INTEGER NOT NULL DEFAULT 0,
+  last_sync_at TEXT,
+  last_sync_status TEXT,
+  last_sync_error TEXT
+);
+CREATE TABLE IF NOT EXISTS sync_meta (
+  key TEXT PRIMARY KEY NOT NULL,
+  value TEXT
+);
+CREATE TABLE IF NOT EXISTS sync_outbox (
+  table_name TEXT NOT NULL,
+  row_key TEXT NOT NULL,
+  logged_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (table_name, row_key)
+);
+CREATE TABLE IF NOT EXISTS sync_tombstones (
+  table_name TEXT NOT NULL,
+  row_key TEXT NOT NULL,
+  deleted_at TEXT NOT NULL,
+  PRIMARY KEY (table_name, row_key)
+);
+CREATE TABLE IF NOT EXISTS shopping_checks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  uuid TEXT UNIQUE,
+  week_id INTEGER NOT NULL REFERENCES weeks (id) ON DELETE CASCADE,
+  home_id INTEGER REFERENCES homes (id) ON DELETE SET NULL,
+  ingredient_id INTEGER NOT NULL REFERENCES ingredients (id) ON DELETE CASCADE,
+  item_key TEXT NOT NULL UNIQUE,
+  unit TEXT NOT NULL,
+  checked INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_shopping_checks_uuid ON shopping_checks (uuid);
+CREATE INDEX IF NOT EXISTS idx_shopping_checks_week ON shopping_checks (week_id);
+`,
+    apply: async (db) => {
+      for (const table of SYNC_TABLES) {
+        const filter = table.onlyManual ? ' AND manual = 1' : '';
+        const timestamp = table.name === 'preferences'
+          ? "strftime('%Y-%m-%dT%H:%M:%fZ','now')"
+          : "COALESCE(created_at, strftime('%Y-%m-%dT%H:%M:%fZ','now'))";
+        await db.runAsync(
+          `UPDATE ${table.name} SET uuid = COALESCE(uuid, lower(hex(randomblob(16)))),
+             updated_at = COALESCE(updated_at, ${timestamp})
+           WHERE (uuid IS NULL OR updated_at IS NULL)${filter}`
+        );
+      }
+      await db.execAsync(syncTriggersSql());
+      const checkedRows = await db.getAllAsync<{
+        week_id: number; home_id: number | null; ingredient_id: number; unit: string;
+      }>(
+        `SELECT week_id, home_id, ingredient_id, unit FROM shopping_items
+         WHERE manual = 0 AND deleted = 0 AND checked = 1 AND ingredient_id IS NOT NULL`
+      );
+      for (const row of checkedRows) {
+        await saveShoppingCheck(
+          row.week_id, row.home_id, row.ingredient_id, row.unit, true, db
+        );
+      }
+    },
+  },
+  {
+    id: 10,
+    description: 'Independent breakfast, lunch, dinner and optional snack settings',
+    sql: `
+ALTER TABLE week_day_budgets ADD COLUMN meal_settings TEXT;
+UPDATE settings SET value = '0' WHERE key = 'dinner_only';
 `,
   },
 ];

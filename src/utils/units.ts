@@ -34,6 +34,7 @@ export function canMerge(a: Unit, b: Unit): boolean {
 }
 
 export function convert(quantity: number, fromUnit: Unit, toUnit: Unit): number | null {
+  if (!canMerge(fromUnit, toUnit)) return null;
   if (fromUnit === toUnit) return quantity;
   const base = toBase(quantity, fromUnit);
   if (base === null) return null;

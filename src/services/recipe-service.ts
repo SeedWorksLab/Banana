@@ -1,4 +1,14 @@
-import type { MealType } from '../models';
+import { EATING_OUT_TAG, MEAL_TYPES, type MealType } from '../models';
+
+export function recipeMealTypes(recipe: { category: MealType; tags: readonly string[] }): MealType[] {
+  const tags = recipe.tags.map((tag) => tag.trim().toLowerCase());
+  const tagged = MEAL_TYPES.filter((mealType) => tags.includes(mealType));
+  return tagged.length ? tagged : [recipe.category];
+}
+
+export function isEatingOut(recipe: { tags: readonly string[] }): boolean {
+  return recipe.tags.some((tag) => tag.trim().toLowerCase().replace(/[ -]/g, '_') === EATING_OUT_TAG);
+}
 
 export interface RecipeSummary {
   id: number;
@@ -82,7 +92,7 @@ export function filterRecipes<T extends RecipeSummary>(
     if (filter.query !== undefined && !matchesQuery(recipe, filter.query)) {
       return false;
     }
-    if (filter.category != null && recipe.category !== filter.category) {
+    if (filter.category != null && !recipeMealTypes(recipe).includes(filter.category)) {
       return false;
     }
     if (filter.maxMinutes != null && totalMinutes(recipe) > filter.maxMinutes) {

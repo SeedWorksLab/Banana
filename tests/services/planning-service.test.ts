@@ -1,10 +1,11 @@
 import type { WeekDay } from '../../src/models';
 import {
   planGap,
-  planWeek,
+  planWeek as planAllMeals,
   scoreRecipe,
   type PlannerDay,
   type PlannerRecipe,
+  type PlanWeekInput,
 } from '../../src/services/planning-service';
 
 function recipe(partial: Partial<PlannerRecipe>): PlannerRecipe {
@@ -31,6 +32,10 @@ function day(day: WeekDay, mode: PlannerDay['mode'] = 'cook', cookMinutes = 30):
 }
 
 const WEEK: WeekDay[] = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+
+function planWeek(input: PlanWeekInput) {
+  return planAllMeals({ ...input, mealType: 'dinner' });
+}
 
 describe('scoreRecipe', () => {
   const context = {
@@ -92,7 +97,7 @@ describe('scoreRecipe', () => {
   });
 });
 
-describe('planWeek', () => {
+describe('explicit dinner-only planning', () => {
   it('plans exactly one dinner per day', () => {
     const proposal = planWeek({ days: WEEK.map((d) => day(d)), recipes: [recipe({ id: 1 })], defaultServings: 2 });
     expect(proposal.slots).toHaveLength(7);
@@ -192,7 +197,8 @@ describe('planWeek', () => {
       defaultServings: 2,
     });
     expect(proposal.warnings).toHaveLength(1);
-    expect(proposal.slots[0].recipeId).toBe(1);
+    expect(proposal.slots[0].recipeId).toBeNull();
+    expect(proposal.slots[0].kind).toBe('empty');
   });
 
   it('is deterministic for identical input', () => {
@@ -205,7 +211,78 @@ describe('planWeek', () => {
   });
 });
 
+describe('three-meal planning', () => {
+  const cookbook = [
+    recipe({ id: 1, name: 'Porridge', category: 'breakfast', prepMinutes: 5, cookMinutes: 5 }),
+    recipe({ id: 2, name: 'Soup', category: 'lunch', prepMinutes: 10, cookMinutes: 10 }),
+    recipe({ id: 3, name: 'Curry', category: 'dinner', prepMinutes: 10, cookMinutes: 20 }),
+    recipe({ id: 4, name: 'Pizza place', category: 'dinner', tags: ['lunch', 'dinner', 'eating_out'], prepMinutes: 0, cookMinutes: 0 }),
+    recipe({ id: 5, name: 'Apple', category: 'snack', prepMinutes: 0, cookMinutes: 0 }),
+  ];
+
+  it('plans 21 appropriate meals in a week with no default snacks or restaurants', () => {
+    const input = { days: WEEK.map((d) => day(d)), recipes: cookbook, defaultServings: 2 };
+    const proposal = planAllMeals(input);
+    expect(proposal.slots).toHaveLength(21);
+    for (const d of WEEK) {
+      expect(proposal.slots.filter((slot) => slot.day === d).map((slot) => [slot.mealType, slot.recipeId])).toEqual([
+        ['breakfast', 1], ['lunch', 2], ['dinner', 3],
+      ]);
+    }
+    expect(planAllMeals(input)).toEqual(proposal);
+  });
+
+  it('uses independent meal times, and restaurants only at the requested meal', () => {
+    const proposal = planAllMeals({
+      days: [{
+        ...day('mon'), mealSettings: [
+          { mealType: 'breakfast', mode: 'cook', cookMinutes: 10, enabled: true },
+          { mealType: 'lunch', mode: 'eating_out', cookMinutes: 0, enabled: true },
+          { mealType: 'dinner', mode: 'cook', cookMinutes: 30, enabled: true },
+          { mealType: 'snack', mode: 'cook', cookMinutes: 5, enabled: true },
+        ],
+      }],
+      recipes: cookbook, defaultServings: 2,
+    });
+    expect(proposal.slots.map((slot) => [slot.mealType, slot.recipeId])).toEqual([
+      ['breakfast', 1], ['lunch', 4], ['dinner', 3], ['snack', 5],
+    ]);
+  });
+
+  it('keeps a gap rather than using dinner for breakfast or overrunning a meal time limit', () => {
+    const proposal = planAllMeals({
+      days: [{ ...day('mon'), mealSettings: [{ mealType: 'breakfast', mode: 'cook', cookMinutes: 2, enabled: true }] }],
+      recipes: cookbook, defaultServings: 2,
+    });
+    expect(proposal.slots[0]).toMatchObject({ mealType: 'breakfast', kind: 'empty', recipeId: null });
+    expect(proposal.slots[1].recipeId).toBe(2);
+    expect(proposal.slots[2].recipeId).toBe(3);
+  });
+
+  it('uses a multi-meal recipe for all its tagged meal types', () => {
+    const proposal = planAllMeals({
+      days: [day('mon')], defaultServings: 2,
+      recipes: [recipe({ id: 9, category: 'dinner', tags: ['breakfast', 'lunch', 'dinner'] })],
+    });
+    expect(proposal.slots.map((slot) => slot.recipeId)).toEqual([9, 9, 9]);
+  });
+
+  it('does not let an incompatible pinned restaurant bypass the eating-out gate', () => {
+    const proposal = planAllMeals({
+      days: [day('mon')], recipes: cookbook, defaultServings: 2,
+      pinned: [{ day: 'mon', mealType: 'lunch', recipeId: 4, freeText: null }],
+    });
+    expect(proposal.slots.find((slot) => slot.mealType === 'lunch')?.recipeId).toBe(2);
+  });
+});
+
 describe('planGap', () => {
+  it('honours one meal’s no-cook, leftovers and eating-out modes', () => {
+    const recipes = [recipe({ id: 1 }), recipe({ id: 2, tags: ['dinner', 'eating_out'], prepMinutes: 0, cookMinutes: 0 })];
+    expect(planGap(day('mon', 'no_cook'), recipes, { defaultServings: 2 }).kind).toBe('empty');
+    expect(planGap(day('mon', 'leftovers'), recipes, { defaultServings: 2 }).kind).toBe('leftovers');
+    expect(planGap(day('mon', 'eating_out'), recipes, { defaultServings: 2 }).recipeId).toBe(2);
+  });
   it('fills one day with the best unused recipe', () => {
     const slot = planGap(day('wed'), [recipe({ id: 1 }), recipe({ id: 2, prepMinutes: 1, cookMinutes: 5 })], {
       defaultServings: 2,

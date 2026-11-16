@@ -3,6 +3,7 @@ import { INGREDIENT_CATEGORIES, UNITS } from '../models';
 import type { IngredientCategory, ShoppingItem, Unit } from '../models';
 import { newUuid } from '../utils/uuid';
 import { getDatabase } from './database';
+import { saveShoppingCheck } from './shoppingChecks';
 
 export interface ShoppingItemInput {
   weekId: number;
@@ -166,6 +167,10 @@ export async function setShoppingItemChecked(
   db?: SQLiteDatabase
 ): Promise<void> {
   const database = db ?? (await getDatabase());
+  const item = await getShoppingItem(id, database);
+  if (item && !item.manual && item.ingredientId !== null) {
+    await saveShoppingCheck(item.weekId, item.homeId, item.ingredientId, item.unit, checked, database);
+  }
   await database.runAsync(
     `UPDATE shopping_items
         SET checked = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')

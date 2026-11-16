@@ -30,6 +30,14 @@
       "expo-sharing",
       "expo-notifications",
       [
+        "expo-audio",
+        {
+          "microphonePermission": "Banana records the leaflet you choose to dictate, including while another app is open.",
+          "enableBackgroundRecording": true,
+          "enableBackgroundPlayback": false
+        }
+      ],
+      [
         "expo-speech-recognition",
         {
           "microphonePermission": "Banana uses the microphone only while you dictate meal wishes.",

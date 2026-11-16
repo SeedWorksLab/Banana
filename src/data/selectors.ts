@@ -9,6 +9,7 @@ import type {
   WeekDayBudget,
 } from '../models';
 import type { RecipeSummary } from '../services/recipe-service';
+import { isEatingOut } from '../services/recipe-service';
 import type { PlannerRecipe } from '../services/planning-service';
 import type { PlannedMeal } from '../services/shopping-list-service';
 
@@ -126,19 +127,21 @@ export function buildPlannerRecipes(
 }
 
 export function buildPlannedMeals(
-  slots: readonly Slot[],
-  recipes: readonly Recipe[],
-  recipeIngredients: readonly RecipeIngredient[],
-  ingredients: readonly Ingredient[],
-  budgets: readonly WeekDayBudget[] = [],
-  defaultHomeId: number | null = null
+  slots: readonly Pick<Slot, 'id' | 'kind' | 'recipeId' | 'day' | 'servings'>[],
+  recipes: readonly Pick<Recipe, 'id' | 'servings'>[],
+  recipeIngredients: readonly Pick<RecipeIngredient, 'recipeId' | 'ingredientId' | 'quantity' | 'unit' | 'optional'>[],
+  ingredients: readonly Pick<Ingredient, 'id' | 'name' | 'category'>[],
+  budgets: readonly Pick<WeekDayBudget, 'day' | 'homeId'>[] = [],
+  defaultHomeId: number | null = null,
+  tags: readonly Pick<RecipeTag, 'recipeId' | 'tag'>[] = []
 ): PlannedMeal[] {
   const recipeById = new Map(recipes.map((recipe) => [recipe.id, recipe]));
   const ingredientById = new Map(ingredients.map((ingredient) => [ingredient.id, ingredient]));
   const homeByDay = new Map(budgets.map((budget) => [budget.day, budget.homeId]));
   const meals: PlannedMeal[] = [];
   for (const slot of slots) {
-    if (slot.kind !== 'recipe' || slot.recipeId === null) {
+    if (slot.kind !== 'recipe' || slot.recipeId === null ||
+      isEatingOut({ tags: tags.filter((tag) => tag.recipeId === slot.recipeId).map((tag) => tag.tag) })) {
       continue;
     }
     const recipe = recipeById.get(slot.recipeId);
@@ -148,7 +151,7 @@ export function buildPlannedMeals(
       servings: slot.servings,
       recipeServings: recipe?.servings ?? slot.servings,
       ingredients: recipeIngredients
-        .filter((row) => row.recipeId === slot.recipeId)
+        .filter((row) => row.recipeId === slot.recipeId && !row.optional)
         .map((row) => {
           const ingredient = ingredientById.get(row.ingredientId);
           return {

@@ -12,6 +12,8 @@ import type {
   Ingredient,
   IngredientCategory,
   MatchStatus,
+  MealSetting,
+  MealType,
   PantryItem,
   PantryLevel,
   Preferences,
@@ -31,6 +33,11 @@ import type {
 } from '../models';
 import { getDatabase } from '../database/database';
 import { DEFAULT_SETTINGS, getSettings, updateSettings } from '../database/settings';
+import { DEFAULT_SYNC_STATE, getSyncState, updateSyncState, type SyncState } from '../database/syncState';
+import { getSyncMeta } from '../database/syncMeta';
+import { seedWorksConfig } from '../sync/cloud';
+import { syncNow, type SyncResult } from '../sync/engine';
+import { getSignedInUser, signInToSeedWorks, signOutOfSeedWorks } from '../sync/supabase';
 import {
   DEFAULT_AI_STATE,
   clearAiCredentials as clearAiCredentialsRow,
@@ -60,6 +67,8 @@ import {
   getAllPantryItems,
   setPantryExpiry as setPantryExpiryRow,
   setPantryLevel,
+  upsertPantryItem,
+  type PantryItemInput,
 } from '../database/pantry';
 import {
   createHome as createHomeRow,
@@ -90,15 +99,18 @@ import {
   replaceGeneratedShoppingItems,
   setShoppingItemChecked,
 } from '../database/shoppingItems';
+import { getShoppingChecks, shoppingCheckKey } from '../database/shoppingChecks';
 import {
   getWeekDayBudgets,
   setWeekDayHome as setWeekDayHomeRow,
+  setWeekDayMealSettings,
   upsertWeekDayBudget,
 } from '../database/weekDayBudgets';
 import { ensureWeek, getWeek, setWeekStatus as setWeekStatusRow } from '../database/weeks';
 import { isoNow, todayDate, weekStart } from '../utils/date';
 import { buildShoppingList, type PlannedMeal } from '../services/shopping-list-service';
-import type { RatingEntry } from '../services/recipe-service';
+import { isEatingOut, type RatingEntry } from '../services/recipe-service';
+import { allowsRecipeForMeal, mealSettingsForDay, replaceMealSetting } from '../services/meal-settings-service';
 import { matchTicketLines, parseTicketText } from '../services/ticket-service';
 import {
   bestDealForIngredient,
@@ -106,7 +118,8 @@ import {
   type IngredientDeal,
 } from '../services/deal-service';
 import { expiringIngredientIds } from '../services/expiry-service';
-import { planGap, type PlannerRecipe } from '../services/planning-service';
+import { planWeek, type PlannerRecipe } from '../services/planning-service';
+import { WEEK_DAYS } from '../models';
 import { filterRecipesForPreferences } from '../services/preference-service';
 import { wishRecipeShoppingLines } from '../services/wish-recipe-service';
 import { notifyPlanUpdated } from '../services/notifications';
@@ -177,6 +190,11 @@ export interface AppData {
   ready: boolean;
   error: string | null;
   settings: Settings;
+  syncState: SyncState;
+  seedWorksEmail: string | null;
+  signInSeedWorks: (email: string, password: string) => Promise<SyncResult>;
+  signOutSeedWorks: () => Promise<void>;
+  syncSeedWorks: () => Promise<SyncResult>;
   aiState: AiState;
   preferences: Preferences;
   ingredients: Ingredient[];
@@ -219,6 +237,7 @@ export interface AppData {
     level: PantryLevel,
     expiresOn?: string | null
   ) => Promise<void>;
+  savePantryItem: (input: PantryItemInput) => Promise<void>;
   setPantryExpiry: (
     ingredientId: number,
     homeId: number,
@@ -246,12 +265,15 @@ export interface AppData {
     homeId?: number | null
   ) => Promise<void>;
   setDayHome: (weekId: number, day: WeekDay, homeId: number | null) => Promise<void>;
+  setMealBudget: (weekId: number, day: WeekDay, meal: MealSetting, servings: number, homeId: number | null) => Promise<void>;
+  planWeekMeals: (weekId: number) => Promise<void>;
   setDayWish: (
     weekId: number,
     day: WeekDay,
     recipeId: number | null,
     freeText: string | null,
-    servings: number
+    servings: number,
+    mealType?: MealType
   ) => Promise<void>;
   createSlot: (input: SlotInput) => Promise<number>;
   updateSlot: (id: number, input: Omit<SlotInput, 'weekId'>) => Promise<void>;
@@ -275,6 +297,8 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [syncState, setSyncState] = useState<SyncState>(DEFAULT_SYNC_STATE);
+  const [seedWorksEmail, setSeedWorksEmail] = useState<string | null>(null);
   const [aiState, setAiState] = useState<AiState>(DEFAULT_AI_STATE);
   const [preferences, setPreferences] = useState<Preferences>(DEFAULT_PREFERENCES);
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
@@ -298,6 +322,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       const db = await getDatabase();
       const [
         nextSettings,
+        nextSyncState,
         nextAiState,
         nextPreferences,
         nextIngredients,
@@ -315,6 +340,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         nextAiRuns,
       ] = await Promise.all([
         getSettings(db),
+        getSyncState(db),
         getAiState(db),
         getPreferences(db),
         getAllIngredients(db),
@@ -332,6 +358,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         getAiRuns(50, db),
       ]);
       setSettings(nextSettings);
+      setSyncState(nextSyncState);
       setAiState(nextAiState);
       setPreferences(nextPreferences);
       setIngredients(nextIngredients);
@@ -357,8 +384,21 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     let active = true;
     void (async () => {
       await refresh();
-      if (active) {
-        setReady(true);
+      if (active) setReady(true);
+      try {
+        seedWorksConfig();
+        const user = await getSignedInUser();
+        if (active) setSeedWorksEmail(user?.email ?? null);
+        if (active && user && (await getSyncState()).enabled) {
+          try {
+            await syncNow();
+            await refresh();
+          } catch {
+            if (active) setSyncState(await getSyncState());
+          }
+        }
+      } catch {
+        // Offline use and builds without SeedWorks configuration stay local.
       }
     })();
     return () => {
@@ -386,6 +426,17 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         throw new Error('Configure the AI provider in Settings first.');
       }
       return provider;
+    };
+
+    const syncSeedWorks = async (): Promise<SyncResult> => {
+      try {
+        const result = await syncNow();
+        if (!result) throw new Error('SeedWorks sync is not enabled.');
+        return result;
+      } finally {
+        setSyncState(await getSyncState());
+        await refresh();
+      }
     };
 
     const recordSuccess = async (
@@ -458,6 +509,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         defaultHome,
         stores,
         recipes,
+        recipeTags,
         recipeIngredients,
         ingredients,
         pantryItems,
@@ -497,6 +549,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         defaultHome,
         stores,
         recipes,
+        recipeTags,
         recipeIngredients,
         ingredients,
         pantryItems,
@@ -543,6 +596,26 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       saveSettings: async (patch) => {
         setSettings(await withDb((db) => updateSettings(patch, db)));
       },
+      syncState,
+      seedWorksEmail,
+      signInSeedWorks: async (email, password) => {
+        const user = await signInToSeedWorks(email.trim(), password);
+        const db = await getDatabase();
+        const linked = await getSyncMeta('sync_identity_binding', db);
+        if (linked && linked !== user.id) {
+          await signOutOfSeedWorks();
+          throw new Error('This local data is linked to another SeedWorks account.');
+        }
+        setSeedWorksEmail(user.email ?? null);
+        setSyncState(await updateSyncState({ enabled: true }, db));
+        return syncSeedWorks();
+      },
+      signOutSeedWorks: async () => {
+        await signOutOfSeedWorks();
+        setSeedWorksEmail(null);
+        setSyncState(await updateSyncState({ enabled: false }));
+      },
+      syncSeedWorks,
       saveAiState: async (patch) => {
         setAiState(await withDb((db) => updateAiState(patch, db)));
       },
@@ -646,6 +719,10 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         });
         await refresh();
       },
+      savePantryItem: async (input) => {
+        await withDb((db) => upsertPantryItem(input, db));
+        await refresh();
+      },
       setPantryLevel: async (ingredientId, homeId, level, expiresOn = null) => {
         await withDb((db) => setPantryLevel(ingredientId, homeId, level, expiresOn, db));
         await refresh();
@@ -740,15 +817,57 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         await withDb((db) => setWeekDayHomeRow(weekId, day, homeId, db));
         await refresh();
       },
-      setDayWish: async (weekId, day, recipeId, freeText, servings) => {
+      planWeekMeals: async (weekId) => {
+        await withDb(async (db) => {
+          await db.withTransactionAsync(async () => {
+            await replanDays(db, weekId, WEEK_DAYS, { settings, preferences }, new Set());
+          });
+        });
+        await refresh();
+      },
+      setMealBudget: async (weekId, day, meal, servings, homeId) => {
+        await withDb(async (db) => {
+          const current = (await getWeekDayBudgets(weekId, db)).find((row) => row.day === day);
+          await upsertWeekDayBudget({
+            weekId, day, mode: current?.mode ?? 'cook',
+            cookMinutes: current?.cookMinutes ?? settings.defaultWeeknightMinutes,
+            servings, homeId,
+          }, db);
+          await setWeekDayMealSettings(weekId, day,
+            replaceMealSetting(mealSettingsForDay(current ?? { mode: 'cook', cookMinutes: settings.defaultWeeknightMinutes }), meal), db);
+          const slots = (await getSlotsByWeek(weekId, db)).filter((slot) => slot.day === day && slot.mealType === meal.mealType);
+          for (const slot of slots) {
+            const recipe = recipes.find((entry) => entry.id === slot.recipeId);
+            const tags = recipeTags.filter((tag) => tag.recipeId === slot.recipeId).map((tag) => tag.tag);
+            if (!meal.enabled || (recipe && !allowsRecipeForMeal({ ...recipe, tags }, meal))) {
+              if (!slot.cookedAt) await deleteSlotRow(slot.id, db);
+            } else if (!slot.cookedAt) {
+              await updateSlotRow(slot.id, {
+                day: slot.day, mealType: slot.mealType, kind: slot.kind, recipeId: slot.recipeId,
+                freeText: slot.freeText, servings, note: slot.note, pinned: slot.pinned, sortOrder: slot.sortOrder,
+              }, db);
+            }
+          }
+        });
+      },
+      setDayWish: async (weekId, day, recipeId, freeText, servings, mealType = 'dinner') => {
         await withDb(async (db) => {
           const slots = await getSlotsByWeek(weekId, db);
           const existing = slots.find(
-            (slot) => slot.day === day && slot.mealType === 'dinner' && slot.pinned
+            (slot) => slot.day === day && slot.mealType === mealType
           );
           const text = freeText?.trim() || null;
+          if (recipeId !== null) {
+            const recipe = recipes.find((entry) => entry.id === recipeId);
+            const budget = (await getWeekDayBudgets(weekId, db)).find((entry) => entry.day === day);
+            const meal = mealSettingsForDay(budget ?? { mode: 'cook', cookMinutes: 45 }).find((entry) => entry.mealType === mealType);
+            const tags = recipeTags.filter((tag) => tag.recipeId === recipeId).map((tag) => tag.tag);
+            if (!recipe || !meal || !allowsRecipeForMeal({ ...recipe, tags }, meal)) {
+              throw new Error('Choose a recipe suitable for this meal. Restaurants require Eating out.');
+            }
+          }
           if (recipeId === null && text === null) {
-            if (existing) {
+            if (existing?.pinned) {
               await deleteSlotRow(existing.id, db);
             }
             return;
@@ -760,7 +879,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
               existing.id,
               {
                 day,
-                mealType: 'dinner',
+                mealType,
                 kind,
                 recipeId,
                 freeText: resolvedText,
@@ -777,7 +896,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
             {
               weekId,
               day,
-              mealType: 'dinner',
+              mealType,
               kind,
               recipeId,
               freeText: resolvedText,
@@ -961,6 +1080,8 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     ready,
     error,
     settings,
+    syncState,
+    seedWorksEmail,
     aiState,
     preferences,
     ingredients,
@@ -995,6 +1116,7 @@ export function useAppData(): AppData {
 interface AgentContextInput {
   weekStartDate: string;
   budgets: readonly WeekDayBudget[];
+  recipeTags: readonly RecipeTag[];
   slots: readonly Slot[];
   homes: readonly Home[];
   defaultHome: Home | null;
@@ -1039,13 +1161,17 @@ function buildAgentContext(input: AgentContextInput): PlanEditContext {
     weekStart: input.weekStartDate,
     weeklyBudgetCents: input.preferences.weeklyBudgetCents > 0 ? input.preferences.weeklyBudgetCents : null,
     homes: input.homes.map((home) => ({ id: home.id, name: home.name })),
-    days: input.budgets.map((budget) => ({
-      day: budget.day,
-      mode: budget.mode,
-      cookMinutes: budget.cookMinutes,
-      servings: budget.servings ?? input.preferences.defaultServings,
-      homeName: homeById.get(budget.homeId ?? defaultHomeId)?.name ?? null,
-    })),
+    days: WEEK_DAYS.map((day) => {
+      const budget = input.budgets.find((entry) => entry.day === day);
+      const fallback = { mode: 'cook' as const, cookMinutes: input.preferences.maxMinutesWeeknight };
+      return {
+        day, mode: budget?.mode ?? fallback.mode,
+        cookMinutes: budget?.cookMinutes ?? fallback.cookMinutes,
+        servings: budget?.servings ?? input.preferences.defaultServings,
+        homeName: homeById.get(budget?.homeId ?? defaultHomeId)?.name ?? null,
+        meals: mealSettingsForDay(budget ?? fallback),
+      };
+    }),
     slots: input.slots.map((slot) => ({
       day: slot.day,
       mealType: slot.mealType,
@@ -1064,7 +1190,7 @@ function buildAgentContext(input: AgentContextInput): PlanEditContext {
         name: recipe.name,
         minutes: recipe.prepMinutes + recipe.cookMinutes,
         category: recipe.category,
-        tags: [],
+        tags: input.recipeTags.filter((tag) => tag.recipeId === recipe.id).map((tag) => tag.tag),
         isWish: recipe.isWish,
         ingredients: namesByRecipe.get(recipe.id) ?? [],
       })),
@@ -1253,6 +1379,13 @@ async function applyPlanActions(
       }
       const kind = recipeId !== null ? 'recipe' : 'free_text';
       const budget = (await getWeekDayBudgets(weekId, db)).find((row) => row.day === action.day);
+      const meal = mealSettingsForDay(budget ?? { mode: 'cook', cookMinutes: 45 })
+        .find((entry) => entry.mealType === action.mealType);
+      if (recipeId !== null) {
+        const recipe = (await getAllRecipes(db)).find((entry) => entry.id === recipeId);
+        const tags = (await getAllRecipeTags(db)).filter((tag) => tag.recipeId === recipeId).map((tag) => tag.tag);
+        if (!recipe || !meal || !allowsRecipeForMeal({ ...recipe, tags }, meal)) continue;
+      }
       const servings =
         action.servings ?? budget?.servings ?? options.preferences.defaultServings;
       if (existing) {
@@ -1301,6 +1434,31 @@ async function applyPlanActions(
       }
       continue;
     }
+    if (action.type === 'set_meal') {
+      const current = (await getWeekDayBudgets(weekId, db)).find((row) => row.day === action.day);
+      const settings = mealSettingsForDay(current ?? { mode: 'cook', cookMinutes: 45 });
+      const previous = settings.find((entry) => entry.mealType === action.mealType);
+      await upsertWeekDayBudget({
+        weekId, day: action.day, mode: current?.mode ?? 'cook', cookMinutes: current?.cookMinutes ?? 45,
+        servings: current?.servings ?? options.preferences.defaultServings, homeId: current?.homeId,
+      }, db);
+      await setWeekDayMealSettings(weekId, action.day, replaceMealSetting(settings, {
+        mealType: action.mealType, mode: action.mode, cookMinutes: action.cookMinutes ?? previous?.cookMinutes ?? 45, enabled: action.enabled,
+      }), db);
+      const existingSlots = (await getSlotsByWeek(weekId, db))
+        .filter((slot) => slot.day === action.day && slot.mealType === action.mealType && !slot.pinned && slot.cookedAt === null);
+      const currentRecipes = await getAllRecipes(db);
+      const currentTags = await getAllRecipeTags(db);
+      for (const slot of existingSlots) {
+        const recipe = currentRecipes.find((entry) => entry.id === slot.recipeId);
+        const tags = currentTags.filter((tag) => tag.recipeId === slot.recipeId).map((tag) => tag.tag);
+        if (!action.enabled || (recipe && !allowsRecipeForMeal({ ...recipe, tags }, {
+          mealType: action.mealType, mode: action.mode, cookMinutes: action.cookMinutes ?? 45, enabled: action.enabled,
+        }))) await deleteSlotRow(slot.id, db);
+      }
+      changedDays.add(action.day);
+      continue;
+    }
     if (action.type === 'set_day') {
       const budgets = await getWeekDayBudgets(weekId, db);
       const current = budgets.find((row) => row.day === action.day);
@@ -1317,6 +1475,12 @@ async function applyPlanActions(
         },
         db
       );
+      if (action.mode !== null || action.cookMinutes !== null) {
+        await setWeekDayMealSettings(weekId, action.day,
+          mealSettingsForDay(current ?? { mode: 'cook', cookMinutes: 45 }).map((meal) => ({
+            ...meal, mode: action.mode ?? meal.mode, cookMinutes: action.cookMinutes ?? meal.cookMinutes,
+          })), db);
+      }
       changedDays.add(action.day);
       continue;
     }
@@ -1353,6 +1517,9 @@ async function applyPlanActions(
         const budget = (await getWeekDayBudgets(weekId, db)).find(
           (row) => row.day === action.scheduleDay
         );
+        const meal = mealSettingsForDay(budget ?? { mode: 'cook', cookMinutes: 45 })
+          .find((entry) => entry.mealType === action.mealType);
+        if (!meal || !allowsRecipeForMeal(action.recipe, meal)) continue;
         const servings = budget?.servings ?? options.preferences.defaultServings;
         if (existing?.pinned) {
           changedDays.add(action.scheduleDay);
@@ -1480,63 +1647,51 @@ async function replanDays(
     }
   );
   const slots = await getSlotsByWeek(weekId, db);
-  const usedRecipeIds = new Set(
-    slots
-      .filter((slot) => slot.recipeId !== null && !days.includes(slot.day))
-      .map((slot) => slot.recipeId as number)
-  );
-  for (const day of days) {
-    const budget = budgets.find((row) => row.day === day);
-    const mode = budget?.mode ?? 'cook';
-    if (mode !== 'cook') {
-      continue;
-    }
-    const homeId = budget?.homeId ?? null;
-    const expired = expiringIngredientIds(
-      pantry.filter((item) => homeId === null || item.homeId === homeId),
-      today
-    );
-    const proposed = planGap(
-      {
-        day,
-        mode,
-        cookMinutes: budget?.cookMinutes ?? 45,
+  const proposal = planWeek({
+    days: days.map((day) => {
+      const budget = budgets.find((row) => row.day === day);
+      const homeId = budget?.homeId ?? null;
+      const fallbackMinutes = day === 'sat' || day === 'sun'
+        ? options.settings.defaultWeekendMinutes : options.settings.defaultWeeknightMinutes;
+      return {
+        day, mode: budget?.mode ?? 'cook',
+        cookMinutes: budget?.cookMinutes ?? fallbackMinutes,
         servings: budget?.servings ?? options.preferences.defaultServings,
         homeId,
-        expiringIngredientIds: expired,
-      },
-      plannerRecipes,
-      {
-        defaultServings: options.preferences.defaultServings,
-        history,
-        excludeRecipeIds: [...usedRecipeIds],
-      }
-    );
-    const existing = slots.find((slot) => slot.day === day && slot.mealType === 'dinner');
-    if (existing?.pinned) {
-      continue;
-    }
-    if (existing) {
-      await deleteSlotRow(existing.id, db);
-    }
+        mealSettings: mealSettingsForDay(budget ?? { mode: 'cook', cookMinutes: fallbackMinutes }),
+        expiringIngredientIds: expiringIngredientIds(pantry.filter((item) => homeId === null || item.homeId === homeId), today),
+      };
+    }),
+    recipes: plannerRecipes,
+    history,
+    defaultServings: options.preferences.defaultServings,
+    pinned: slots.filter((slot) => slot.pinned || slot.cookedAt !== null).map((slot) => ({
+      day: slot.day, mealType: slot.mealType, recipeId: slot.recipeId, freeText: slot.freeText,
+    })),
+  });
+  for (const slot of slots) {
+    if (days.includes(slot.day) && !slot.pinned && slot.cookedAt === null) await deleteSlotRow(slot.id, db);
+  }
+  let sortOrder = slots.length;
+  for (const proposed of proposal.slots) {
+    if (slots.some((slot) => slot.day === proposed.day && slot.mealType === proposed.mealType &&
+      (slot.pinned || slot.cookedAt !== null))) continue;
+    if (proposed.kind === 'empty') continue;
     await createSlotRow(
       {
         weekId,
-        day,
-        mealType: 'dinner',
+        day: proposed.day,
+        mealType: proposed.mealType,
         kind: proposed.kind,
         recipeId: proposed.recipeId,
         freeText: proposed.freeText,
         servings: proposed.servings,
         note: null,
-        sortOrder: slots.length,
+        sortOrder: sortOrder++,
       },
       db
     );
-    if (proposed.recipeId !== null) {
-      usedRecipeIds.add(proposed.recipeId);
-    }
-    changedDays.add(day);
+    changedDays.add(proposed.day);
   }
 }
 
@@ -1640,6 +1795,8 @@ async function regenerateList(
   currency: Currency,
   defaultHomeId: number | null
 ): Promise<ShoppingItem[]> {
+  const eatingOutIds = new Set((await getAllRecipeTags(db))
+    .filter((tag) => isEatingOut({ tags: [tag.tag] })).map((tag) => tag.recipeId));
   const slots = await getSlotsByWeek(weekId, db);
   const budgets = await getWeekDayBudgets(weekId, db);
   const homeByDay = new Map(budgets.map((budget) => [budget.day, budget.homeId]));
@@ -1648,7 +1805,7 @@ async function regenerateList(
 
   const meals: PlannedMeal[] = [];
   for (const slot of slots) {
-    if (slot.kind !== 'recipe' || slot.recipeId === null) {
+    if (slot.kind !== 'recipe' || slot.recipeId === null || eatingOutIds.has(slot.recipeId)) {
       continue;
     }
     const recipe = recipeById.get(slot.recipeId);
@@ -1658,7 +1815,7 @@ async function regenerateList(
       servings: slot.servings,
       recipeServings: recipe?.servings ?? slot.servings,
       ingredients: recipeIngredients
-        .filter((row) => row.recipeId === slot.recipeId)
+        .filter((row) => row.recipeId === slot.recipeId && !row.optional)
         .map((row) => {
           const ingredient = ingredientById.get(row.ingredientId);
           return {
@@ -1688,23 +1845,28 @@ async function regenerateList(
   }
 
   const list = buildShoppingList({ meals, pantryItems, bestDeals });
+  const checks = await getShoppingChecks(weekId, db);
+  const generated = await Promise.all(list.lines.map(async (line, index) => ({
+    weekId,
+    homeId: line.homeId,
+    ingredientId: line.ingredientId,
+    label: line.label,
+    category: line.category,
+    quantity: line.quantity,
+    unit: line.unit,
+    checked: line.ingredientId === null ? false
+      : checks.get(await shoppingCheckKey(
+        weekId, line.homeId, line.ingredientId, line.unit, db
+      )) ?? false,
+    manual: false,
+    saleOnly: false,
+    dealId: line.dealId,
+    priceCents: line.priceCents,
+    sortOrder: index,
+  })));
   await replaceGeneratedShoppingItems(
     weekId,
-    list.lines.map((line, index) => ({
-      weekId,
-      homeId: line.homeId,
-      ingredientId: line.ingredientId,
-      label: line.label,
-      category: line.category,
-      quantity: line.quantity,
-      unit: line.unit,
-      checked: false,
-      manual: false,
-      saleOnly: false,
-      dealId: line.dealId,
-      priceCents: line.priceCents,
-      sortOrder: index,
-    })),
+    generated,
     db
   );
   return getShoppingItems(weekId, db);

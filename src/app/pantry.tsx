@@ -1,11 +1,11 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import {
   Button,
   Card,
   Chip,
   Divider,
-  FAB,
   IconButton,
   List,
   Text,
@@ -17,12 +17,13 @@ import { KeyboardAwareScrollView } from '../components/keyboard-aware-scroll-vie
 import { EmptyState } from '../components/empty-state';
 import { AppDialog } from '../components/app-dialog';
 import { OptionField } from '../components/option-field';
+import { NumberField } from '../components/number-field';
 import { ScreenToast } from '../components/screen-toast';
 import { useAppData } from '../data/DataProvider';
 import { useAppTheme } from '../theme';
-import { PANTRY_LEVELS, type PantryLevel } from '../models';
+import { PANTRY_LEVELS, UNITS, type PantryItem, type PantryLevel, type Unit } from '../models';
 import { estimateExpiryDate, expiringIngredients, soonLabel } from '../services/expiry-service';
-import { CATEGORY_LABELS, PANTRY_LEVEL_LABELS } from '../utils/labels';
+import { CATEGORY_LABELS, PANTRY_LEVEL_LABELS, UNIT_LABELS } from '../utils/labels';
 import { todayDate } from '../utils/date';
 
 const LEVEL_OPTIONS = PANTRY_LEVELS.map((level) => ({
@@ -36,12 +37,13 @@ function isDate(value: string): boolean {
 
 export default function PantryScreen() {
   const theme = useAppTheme();
+  const router = useRouter();
   const {
     ingredients,
     pantryItems,
     homes,
     defaultHome,
-    setPantryLevel,
+    savePantryItem,
     removePantryItem,
     addHome,
     renameHome,
@@ -55,6 +57,9 @@ export default function PantryScreen() {
   const [editIngredientId, setEditIngredientId] = useState<number | null>(null);
   const [editLevel, setEditLevel] = useState<PantryLevel>('stocked');
   const [editExpiry, setEditExpiry] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [editQuantity, setEditQuantity] = useState<number | null>(null);
+  const [editUnit, setEditUnit] = useState<Unit>('g');
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -87,22 +92,32 @@ export default function PantryScreen() {
   }, [homeItems, ingredientById]);
 
   const openAdd = useCallback(() => {
+    if (ingredients.length === 0) {
+      router.push('/ingredients');
+      return;
+    }
     if (addable.length === 0) {
       setToast('Everything you have is already in the pantry');
       return;
     }
-    setEditIngredientId(addable[0].id);
+    setAdding(true);
+    setEditIngredientId(null);
     setEditLevel('stocked');
+    setEditQuantity(null);
+    setEditUnit('g');
     setEditExpiry('');
     setEditOpen(true);
-  }, [addable]);
+  }, [addable, ingredients.length, router]);
 
-  const openEdit = useCallback((ingredientId: number, level: PantryLevel, expiresOn: string | null) => {
-    setEditIngredientId(ingredientId);
-    setEditLevel(level);
-    setEditExpiry(expiresOn ?? '');
+  const openEdit = useCallback((item: PantryItem) => {
+    setAdding(false);
+    setEditIngredientId(item.ingredientId);
+    setEditLevel(item.level);
+    setEditQuantity(item.quantity);
+    setEditUnit(item.unit ?? ingredientById.get(item.ingredientId)?.defaultUnit ?? 'g');
+    setEditExpiry(item.expiresOn ?? '');
     setEditOpen(true);
-  }, []);
+  }, [ingredientById]);
 
   const saveItem = useCallback(async () => {
     if (editIngredientId === null || activeHomeId === null) {
@@ -110,6 +125,10 @@ export default function PantryScreen() {
     }
     const ingredient = ingredientById.get(editIngredientId);
     if (!ingredient) {
+      return;
+    }
+    if (editQuantity !== null && editQuantity < 0) {
+      setToast('Quantity must be zero or greater');
       return;
     }
     if (editExpiry.trim() !== '' && !isDate(editExpiry.trim())) {
@@ -129,13 +148,22 @@ export default function PantryScreen() {
                 ingredient.shelfLifeDays
               )
           : null;
-      await setPantryLevel(editIngredientId, activeHomeId, editLevel, expiresOn);
+      await savePantryItem({
+        ingredientId: editIngredientId,
+        homeId: activeHomeId,
+        level: editLevel,
+        quantity: editLevel === 'out' ? 0 : editQuantity,
+        unit: editQuantity === null && editLevel !== 'out' ? null : editUnit,
+        expiresOn,
+      });
       setEditOpen(false);
       setToast('Pantry updated');
+    } catch (caught) {
+      setToast(caught instanceof Error ? caught.message : 'Could not save the pantry item');
     } finally {
       setBusy(false);
     }
-  }, [editIngredientId, activeHomeId, ingredientById, editExpiry, editLevel, setPantryLevel]);
+  }, [editIngredientId, activeHomeId, ingredientById, editExpiry, editLevel, editQuantity, editUnit, savePantryItem]);
 
   const removeItem = useCallback(async () => {
     if (editIngredientId === null || activeHomeId === null) {
@@ -176,6 +204,16 @@ export default function PantryScreen() {
                   accessibilityLabel="Manage homes"
                 >
                   Homes
+                </Button>
+              </View>
+              <View style={[styles.wrapRow, { gap: theme.spacing[2], marginTop: theme.spacing[3] }]}>
+                <Button mode="contained-tonal" icon="plus" onPress={openAdd}
+                  accessibilityRole="button" accessibilityLabel="Add pantry item" testID="pantry-add">
+                  Add item
+                </Button>
+                <Button onPress={() => router.push('/ingredients')} accessibilityRole="button"
+                  accessibilityLabel="Manage known ingredients">
+                  Known ingredients
                 </Button>
               </View>
               <View style={[styles.wrapRow, { gap: theme.spacing[1], marginTop: theme.spacing[2] }]}>
@@ -231,7 +269,7 @@ export default function PantryScreen() {
                         description={[
                           PANTRY_LEVEL_LABELS[item.level],
                           item.quantity !== null && item.unit !== null
-                            ? `${item.quantity} ${item.unit}`
+                            ? `About ${item.quantity} ${UNIT_LABELS[item.unit]}`
                             : null,
                           item.expiresOn !== null ? `use by ${item.expiresOn}` : null,
                         ]
@@ -239,7 +277,8 @@ export default function PantryScreen() {
                           .join(' · ')}
                         left={(props) => <List.Icon {...props} icon="fridge-outline" />}
                         right={(props) => <List.Icon {...props} icon="chevron-right" />}
-                        onPress={() => openEdit(item.ingredientId, item.level, item.expiresOn)}
+                        onPress={() => openEdit(item)}
+                        accessibilityRole="button"
                         accessibilityLabel={`Edit ${ingredient?.name ?? 'ingredient'}`}
                       />
                     );
@@ -249,20 +288,52 @@ export default function PantryScreen() {
             ))
           )}
         </KeyboardAwareScrollView>
-        <FAB icon="plus" style={styles.fab} onPress={openAdd} accessibilityLabel="Add pantry item" />
       </View>
 
       <AppDialog visible={editOpen} onDismiss={() => setEditOpen(false)}>
         <AppDialog.Title>
-          {editIngredientId !== null ? ingredientById.get(editIngredientId)?.name ?? 'Pantry item' : 'Pantry item'}
+          {adding ? 'Add pantry item' : ingredientById.get(editIngredientId ?? -1)?.name ?? 'Pantry item'}
         </AppDialog.Title>
         <AppDialog.Content>
+          <KeyboardAwareScrollView style={{ maxHeight: theme.spacing[10] * 5 }}>
+          {adding ? (
+            <>
+              <OptionField
+                label="Ingredient"
+                value={editIngredientId}
+                options={addable.map((ingredient) => ({ value: ingredient.id, label: ingredient.name }))}
+                emptyLabel="Choose an ingredient"
+                nullable={false}
+                onChange={(value) => {
+                  setEditIngredientId(value);
+                  setEditUnit(ingredientById.get(value ?? -1)?.defaultUnit ?? 'g');
+                }}
+              />
+              <Button accessibilityRole="button" accessibilityLabel="Add a new known ingredient"
+                onPress={() => { setEditOpen(false); router.push('/ingredients'); }}>
+                Ingredient missing? Add it
+              </Button>
+            </>
+          ) : null}
           <OptionField
-            label="How much is there"
+            label="Stock level"
             value={editLevel}
             options={LEVEL_OPTIONS}
             nullable={false}
             onChange={(value) => value !== null && setEditLevel(value)}
+          />
+          <NumberField
+            label="Approximate quantity (optional)"
+            value={editQuantity}
+            onChange={setEditQuantity}
+            helperText="For example, 500 g of butter. Leave blank if you only know the stock level."
+          />
+          <OptionField
+            label="Unit"
+            value={editUnit}
+            options={UNITS.filter((unit) => unit !== 'to_taste').map((unit) => ({ value: unit, label: UNIT_LABELS[unit] }))}
+            nullable={false}
+            onChange={(value) => value !== null && setEditUnit(value)}
           />
           <TextInput
             label="Use by (optional)"
@@ -277,6 +348,7 @@ export default function PantryScreen() {
               Banana estimates a use-by date from the ingredient.
             </Text>
           ) : null}
+          </KeyboardAwareScrollView>
         </AppDialog.Content>
         <AppDialog.Actions>
           {stockedIds.has(editIngredientId ?? -1) ? (
@@ -285,7 +357,8 @@ export default function PantryScreen() {
             </Button>
           ) : null}
           <Button onPress={() => setEditOpen(false)}>Cancel</Button>
-          <Button loading={busy} disabled={busy} onPress={() => void saveItem()}>
+          <Button loading={busy} disabled={busy || editIngredientId === null} onPress={() => void saveItem()}
+            accessibilityRole="button" accessibilityLabel="Save pantry item">
             Save
           </Button>
         </AppDialog.Actions>
@@ -366,10 +439,5 @@ const styles = StyleSheet.create({
   },
   flex: {
     flex: 1,
-  },
-  fab: {
-    position: 'absolute',
-    right: 16,
-    bottom: 16,
   },
 });

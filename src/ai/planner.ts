@@ -1,3 +1,4 @@
+import type { MealSetting } from '../models';
 import {
   parseNewspaperValue,
   parsePlanEditValue,
@@ -25,6 +26,7 @@ export interface PlanEditContext {
     cookMinutes: number;
     servings: number;
     homeName: string | null;
+    meals?: MealSetting[];
   }[];
   slots: {
     day: string;

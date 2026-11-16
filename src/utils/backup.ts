@@ -32,6 +32,11 @@ export async function createBackupFile(): Promise<File> {
     staging = await openDatabaseAsync(name, {}, toFilePath(Paths.cache.uri));
     await backupDatabaseAsync({ sourceDatabase: db, destDatabase: staging });
     await staging.runAsync('UPDATE ai_state SET llm_api_key = NULL WHERE id = 1');
+    await staging.runAsync('DELETE FROM sync_meta');
+    await staging.runAsync(
+      `UPDATE sync_state SET enabled = 0, last_sync_at = NULL,
+       last_sync_status = NULL, last_sync_error = NULL WHERE id = 1`
+    );
     await staging.execAsync('VACUUM');
   } finally {
     await staging?.closeAsync();

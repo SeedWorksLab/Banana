@@ -133,8 +133,8 @@ default, configurable start day). It carries:
 
 - `start_date` and `end_date`;
 - a per-day **time budget** (§3.2);
-- the chosen **slot layout** (how many meals a day you plan — dinner only by
-  default, optionally lunch and breakfast);
+- the chosen **slot layout** (breakfast, lunch and dinner by default, with
+  snacks only when explicitly requested);
 - an optional weekly **food budget** in cents;
 - a `status`: `draft`, `planned`, `shopping`, `cooking`, `done`.
 
@@ -143,11 +143,12 @@ deliberate act.
 
 ### 3.2 Time budgets
 
-For each day the user sets a **time budget**: the number of minutes available
-to cook, or one of two sentinels:
+For each meal on each day the user sets an independent **time budget**:
+the number of minutes available to cook, or an explicit mode:
 
 - `no_cook` — you are not cooking that day (takeaway, a restaurant, a fast);
 - `leftovers` — you intend to eat the previous day's leftovers.
+- `eating_out` — choose a restaurant or eating-out entry for this meal only.
 
 `leftovers` is a first-class budget, not a note, because it is the single
 biggest lever on both cost and time: it tells the planner to *cook once, eat
@@ -167,8 +168,10 @@ A **slot** is one meal place: a day plus a meal type (`breakfast`, `lunch`,
 - a reference to a **leftovers** budget, or
 - nothing (unfilled).
 
-Only `dinner` slots exist until the user enables more. An unfilled slot is a
-legitimate, visible state — the app shows gaps rather than inventing meals.
+Breakfast, lunch and dinner are always visible, including before the first
+plan. Snacks are disabled until the user requests one for a particular day.
+An unfilled slot is a legitimate, visible state — if no suitable recipe fits,
+the app shows a gap rather than inventing a meal or choosing the wrong meal type.
 
 ### 3.4 Cook, rate, learn
 
@@ -199,7 +202,15 @@ A **recipe** is a reusable meal. It carries:
 - `is_favourite`, `is_deprecated`;
 - an ordered list of **recipe ingredients**;
 - an ordered list of **steps**;
+- one or more suitable meal tags (`breakfast`, `lunch`, `dinner`, `snack`),
+  editable manually and extractable by AI; existing untagged recipes fall back
+  to their original single category;
+- an optional `eating_out` tag, for places such as "Pizza place". The planner
+  can schedule these only for meals explicitly marked `eating_out`. They add
+  no ingredients to the shopping list;
 - `uuid` and `updated_at` from migration 1.
+
+Recipe detail opens with the cooking steps expanded; the user can hide them.
 
 ### 4.2 Ingredients
 
@@ -216,10 +227,13 @@ the shopping list by default.
 
 ### 4.3 Pantry
 
-The **pantry** records what is already at home: an ingredient, an optional
-amount, and a rough confidence (`stocked` / `low` / `out`). A pantry item that
-is `stocked` is removed from the shopping list; `low` keeps it on the list
-with a marker; `out` or absent means buy it.
+The **pantry** records what is already at home: a chosen ingredient, an optional
+approximate quantity and unit (for example, 500 g of butter), and a rough
+confidence (`stocked` / `low` / `out`). Known amounts subtract from the combined
+requirements for that home using compatible units. Without an amount, `stocked`
+means enough and `low` means buy the required amount. `out` or absent means buy
+it. The separate **Known ingredients** page lets the user add and edit names,
+categories, default units, quantities, shelf life, staple status and notes.
 
 The pantry is deliberately rough. It is not an inventory system; it is a
 one-tap "we have this".
@@ -302,7 +316,7 @@ one exception for items the user adds manually. It is computed from:
 
 ```
   sum of all recipe ingredients in the week's filled slots
-    − pantry items marked stocked
+    − known pantry quantities (or the whole requirement when stocked without an amount)
     − recipe ingredients marked optional (unless explicitly wanted)
     + manually added items
 ```
@@ -450,6 +464,8 @@ per-store result. Wrong ingredient matches are correctable here.
 Appearance (light / dark / system), household and diet, allergies and dislikes,
 budget and default servings, week start day, stores on/off and scraping
 preferences, AI provider, backup and restore, about and What's new.
+Shops open in a separate settings page. Planning defaults and food preferences
+share one **Preferences & defaults** subpage to keep the main Settings page short.
 
 ### Stack screens
 
@@ -474,6 +490,14 @@ honest about it.
 
 Everything else is local. There is no Banana backend, no account, no analytics,
 no telemetry, no crash reporting, no advertising, and no third party.
+
+Dictation uses the operating system's built-in on-device speech recognizer.
+Banana does not bundle speech-model weights or upload audio. Leaflet recording
+uses Expo Audio with Android's microphone foreground service and its recording
+notification, so it can continue while another app is open. After Stop, Android
+13+ transcribes the saved audio locally; the resulting text is sent to the
+user-configured AI for leaflet extraction. Failed transcription keeps the audio
+for retry; successful transcription or explicit cancellation removes it.
 
 **Rules for the scraper, non-negotiable:**
 

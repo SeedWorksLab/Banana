@@ -1,7 +1,7 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { Button, Card, Chip, Divider, FAB, IconButton, List, SegmentedButtons, Text, TextInput } from 'react-native-paper';
+import { Button, Card, Chip, Divider, FAB, IconButton, List, SegmentedButtons, Switch, Text, TextInput } from 'react-native-paper';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 
 import { ScreenFade } from '../../components/screen-fade';
@@ -14,7 +14,7 @@ import { NumberField } from '../../components/number-field';
 import { OptionField } from '../../components/option-field';
 import { useAppTheme } from '../../theme';
 import { useAppData, type WeekPlan } from '../../data/DataProvider';
-import { DAY_MODES, type DayMode, type WeekDay } from '../../models';
+import { MEAL_MODES, MEAL_TYPES, type DayMode, type MealMode, type MealType, type WeekDay } from '../../models';
 import { computeRatings } from '../../services/recipe-service';
 import { recommendRecipes } from '../../services/discovery-service';
 import {
@@ -32,16 +32,16 @@ import {
 } from '../../data/selectors';
 import { buildShoppingList } from '../../services/shopping-list-service';
 import { bestDealForIngredient, isDealActive, type IngredientDeal } from '../../services/deal-service';
-import { planWeek } from '../../services/planning-service';
+import { allowsRecipeForMeal, mealSettingsForDay } from '../../services/meal-settings-service';
 import { buildDayPlans, weekProgress, weekRange } from '../../services/week-service';
 import { formatCents } from '../../utils/currency';
 import { addDays, formatDate, todayDate, weekStart } from '../../utils/date';
-import { DAY_MODE_LABELS, weekDayLabel } from '../../utils/labels';
+import { DAY_MODE_LABELS, MEAL_TYPE_LABELS, weekDayLabel } from '../../utils/labels';
 import { expiringIngredients, soonLabel } from '../../services/expiry-service';
 
-const DAY_MODE_OPTIONS = DAY_MODES.map((mode) => ({
+const MEAL_MODE_OPTIONS = MEAL_MODES.map((mode) => ({
   value: mode,
-  label: DAY_MODE_LABELS[mode],
+  label: mode === 'eating_out' ? 'Eating out' : DAY_MODE_LABELS[mode],
 }));
 
 export default function PlanScreen() {
@@ -61,9 +61,8 @@ export default function PlanScreen() {
     deals,
     dealMatches,
     applyPlanInstruction,
-    createSlot,
-    deleteSlot,
-    setDayBudget,
+    planWeekMeals,
+    setMealBudget,
     setDayWish,
     loadWeekPlan,
     regenerateShoppingList,
@@ -78,7 +77,9 @@ export default function PlanScreen() {
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [editingDay, setEditingDay] = useState<WeekDay | null>(null);
-  const [editMode, setEditMode] = useState<DayMode>('cook');
+  const [editMode, setEditMode] = useState<MealMode>('cook');
+  const [editMealType, setEditMealType] = useState<MealType>('dinner');
+  const [editEnabled, setEditEnabled] = useState(true);
   const [editMinutes, setEditMinutes] = useState<number | null>(30);
   const [editServings, setEditServings] = useState<number | null>(2);
   const [editWishRecipeId, setEditWishRecipeId] = useState<number | null>(null);
@@ -91,6 +92,13 @@ export default function PlanScreen() {
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentDictating, setAgentDictating] = useState(false);
   const agentDictationRef = useRef<LiveTranscriptionHandle | null>(null);
+  const startingDictationRef = useRef(false);
+  const dictationAttempt = useRef(0);
+  useEffect(() => () => {
+    dictationAttempt.current += 1;
+    dictationRef.current?.abort();
+    agentDictationRef.current?.abort();
+  }, []);
 
   const load = useCallback(async () => {
     const next = await loadWeekPlan(weekStartDate);
@@ -196,11 +204,13 @@ export default function PlanScreen() {
     [recipes]
   );
   const wishOptions = useMemo(
-    () => [...recipes].sort((a, b) => a.name.localeCompare(b.name)).map((recipe) => ({
+    () => summaries.filter((recipe) => allowsRecipeForMeal(recipe, {
+      mealType: editMealType, mode: editMode, cookMinutes: editMinutes ?? 45, enabled: true,
+    })).sort((a, b) => a.name.localeCompare(b.name)).map((recipe) => ({
       value: recipe.id,
       label: recipe.name,
     })),
-    [recipes]
+    [summaries, editMealType, editMode, editMinutes]
   );
   const homeByDay = useMemo(
     () => new Map((plan?.budgets ?? []).map((budget) => [budget.day, budget.homeId])),
@@ -228,21 +238,12 @@ export default function PlanScreen() {
     () => new Map(ingredients.map((ingredient) => [ingredient.id, ingredient.name])),
     [ingredients]
   );
-  const wishByDay = useMemo(() => {
-    const map = new Map<WeekDay, { recipeId: number | null; freeText: string | null }>();
-    for (const slot of plan?.slots ?? []) {
-      if (slot.pinned && slot.mealType === 'dinner') {
-        map.set(slot.day, { recipeId: slot.recipeId, freeText: slot.freeText });
-      }
-    }
-    return map;
-  }, [plan]);
 
   const estimated = useMemo(() => {
     if (!plan) {
       return null;
     }
-    const meals = buildPlannedMeals(plan.slots, recipes, recipeIngredients, ingredients);
+    const meals = buildPlannedMeals(plan.slots, recipes, recipeIngredients, ingredients, plan.budgets, defaultHome?.id ?? null, recipeTags);
     const today = todayDate();
     const bestDeals = new Map<number, IngredientDeal>();
     const wanted = new Set<number>();
@@ -273,6 +274,8 @@ export default function PlanScreen() {
     dealMatches,
     pantryItems,
     settings.currency,
+    defaultHome,
+    recipeTags,
   ]);
 
   const handlePlanWeek = useCallback(async () => {
@@ -281,61 +284,15 @@ export default function PlanScreen() {
     }
     setBusy(true);
     try {
-      const pinned = plan.slots
-        .filter((slot) => slot.pinned && (slot.kind === 'recipe' || slot.kind === 'free_text'))
-        .map((slot) => ({
-          day: slot.day,
-          mealType: slot.mealType,
-          recipeId: slot.recipeId,
-          freeText: slot.freeText,
-        }));
-      const proposal = planWeek({
-        days: dayPlans.map((day) => ({
-          day: day.day,
-          mode: day.mode,
-          cookMinutes: day.cookMinutes,
-          servings: day.servings,
-        })),
-        recipes: plannerRecipes,
-        history: recipeHistory,
-        pinned,
-        defaultServings: preferences.defaultServings,
-        mealType: 'dinner',
-      });
-      for (const slot of plan.slots) {
-        if (!slot.pinned) {
-          await deleteSlot(slot.id);
-        }
-      }
-      let order = 0;
-      for (const proposalSlot of proposal.slots) {
-        if (proposalSlot.kind === 'empty' || proposalSlot.reason === 'Pinned by you') {
-          continue;
-        }
-        await createSlot({
-          weekId: plan.week.id,
-          day: proposalSlot.day,
-          mealType: proposalSlot.mealType,
-          kind: proposalSlot.kind,
-          recipeId: proposalSlot.recipeId,
-          freeText: proposalSlot.freeText,
-          servings: proposalSlot.servings,
-          note: null,
-          sortOrder: order,
-        });
-        order += 1;
-      }
-      for (const day of dayPlans) {
-        await setDayBudget(plan.week.id, day.day, day.mode, day.cookMinutes, day.servings);
-      }
+      await planWeekMeals(plan.week.id);
       await load();
-      setToast(
-        proposal.warnings.length > 0 ? proposal.warnings[0] : 'Week planned'
-      );
+      setToast('Week planned: breakfast, lunch and dinner. Unfilled meals need a suitable recipe.');
+    } catch (caught) {
+      setToast(caught instanceof Error ? caught.message : 'Could not plan the week');
     } finally {
       setBusy(false);
     }
-  }, [plan, dayPlans, plannerRecipes, recipeHistory, preferences.defaultServings, createSlot, deleteSlot, setDayBudget, load]);
+  }, [plan, planWeekMeals, load]);
 
   const handleRegenerate = useCallback(async () => {
     if (!plan) {
@@ -350,18 +307,27 @@ export default function PlanScreen() {
     }
   }, [plan, regenerateShoppingList, router]);
 
-  const openDayEditor = useCallback((day: { day: WeekDay; mode: DayMode; cookMinutes: number; servings: number }, wish: { recipeId: number | null; freeText: string | null } | undefined) => {
+  const openDayEditor = useCallback((day: { day: WeekDay; mode: DayMode; cookMinutes: number; servings: number }, mealType: MealType = 'dinner') => {
+    const budget = plan?.budgets.find((entry) => entry.day === day.day);
+    const meal = mealSettingsForDay(budget ?? day).find((entry) => entry.mealType === mealType);
+    const wish = plan?.slots.find((slot) => slot.day === day.day && slot.mealType === mealType && slot.pinned);
     setEditingDay(day.day);
-    setEditMode(day.mode);
-    setEditMinutes(day.cookMinutes);
+    setEditMealType(mealType);
+    setEditEnabled(meal?.enabled ?? mealType !== 'snack');
+    setEditMode(meal?.mode ?? 'cook');
+    setEditMinutes(meal?.cookMinutes ?? day.cookMinutes);
     setEditServings(day.servings);
     setEditHomeId(homeByDay.get(day.day) ?? activeHomeId);
     setEditWishRecipeId(wish?.recipeId ?? null);
     setEditWishText(wish?.freeText ?? '');
-  }, [homeByDay, activeHomeId]);
+  }, [homeByDay, activeHomeId, plan]);
 
   const handleSaveDay = useCallback(async () => {
     if (!plan || editingDay === null || editMinutes === null || editServings === null) {
+      return;
+    }
+    if (editMinutes < 0 || editServings <= 0) {
+      setToast('Use a non-negative time and at least one serving');
       return;
     }
     dictationRef.current?.abort();
@@ -369,22 +335,28 @@ export default function PlanScreen() {
     setDictating(false);
     setBusy(true);
     try {
-      await setDayBudget(plan.week.id, editingDay, editMode, editMinutes, editServings, editHomeId);
-      await setDayWish(
+      await setMealBudget(plan.week.id, editingDay, {
+        mealType: editMealType, mode: editMode, cookMinutes: editMinutes, enabled: editEnabled,
+      }, editServings, editHomeId);
+      if (editEnabled) await setDayWish(
         plan.week.id,
         editingDay,
         editWishRecipeId,
         editWishRecipeId === null ? editWishText : null,
-        editServings
+        editServings,
+        editMealType
       );
       await load();
+    } catch (caught) {
+      setToast(caught instanceof Error ? caught.message : 'Could not save the meal');
     } finally {
       setBusy(false);
       setEditingDay(null);
     }
-  }, [plan, editingDay, editMode, editMinutes, editServings, editHomeId, editWishRecipeId, editWishText, setDayBudget, setDayWish, load]);
+  }, [plan, editingDay, editMode, editMinutes, editServings, editHomeId, editWishRecipeId, editWishText, setMealBudget, setDayWish, load, editMealType, editEnabled]);
 
   const closeDayEditor = useCallback(() => {
+    dictationAttempt.current += 1;
     dictationRef.current?.abort();
     dictationRef.current = null;
     setDictating(false);
@@ -394,22 +366,21 @@ export default function PlanScreen() {
   const stopDictation = useCallback(async (apply: boolean) => {
     const handle = dictationRef.current;
     dictationRef.current = null;
-    setDictating(false);
     if (!handle) {
+      setDictating(false);
       return;
     }
     if (!apply) {
       handle.abort();
+      setDictating(false);
       return;
     }
-    const result = await handle.stop();
-    if (result?.text) {
-      setEditWishRecipeId(null);
-      setEditWishText((current) => [current.trim(), result.text.trim()].filter(Boolean).join(' '));
-    }
+    await handle.stop();
+    setDictating(false);
   }, []);
 
   const handleDictate = useCallback(async () => {
+    if (startingDictationRef.current) return;
     if (dictating) {
       await stopDictation(true);
       return;
@@ -418,24 +389,39 @@ export default function PlanScreen() {
       setToast('Speech recognition is not available on this device');
       return;
     }
-    const granted = await requestSpeechRecognitionPermission();
-    if (!granted) {
-      setToast('Microphone permission is needed to dictate');
-      return;
+    startingDictationRef.current = true;
+    const attempt = ++dictationAttempt.current;
+    try {
+      const granted = await requestSpeechRecognitionPermission();
+      if (attempt !== dictationAttempt.current) return;
+      if (!granted) {
+        setToast('Microphone permission is needed to dictate');
+        return;
+      }
+      dictationRef.current = startLiveTranscription({
+        language: settings.language,
+        contextualStrings: recipes.map((recipe) => recipe.name),
+        onTranscript: (text) => {
+          setEditWishRecipeId(null);
+          setEditWishText([editWishText.trim(), text].filter(Boolean).join(' '));
+        },
+        onError: (message) => {
+          setToast(message);
+          setDictating(false);
+          dictationRef.current = null;
+        },
+      });
+      setDictating(true);
+      void dictationRef.current.finished.then(() => {
+        if (attempt === dictationAttempt.current) setDictating(false);
+      });
+    } catch (caught) {
+      setToast(caught instanceof Error ? caught.message : 'Could not start dictation');
+    } finally {
+      startingDictationRef.current = false;
     }
-    dictationRef.current = startLiveTranscription({
-      language: 'en',
-      contextualStrings: recipes.map((recipe) => recipe.name),
-      onError: (message) => {
-        setToast(message);
-        setDictating(false);
-        dictationRef.current = null;
-      },
-    });
-    setDictating(true);
-  }, [dictating, recipes, stopDictation]);
+  }, [dictating, recipes, stopDictation, settings.language, editWishText]);
 
-  const hasMeals = (plan?.slots ?? []).some((slot) => slot.kind !== 'empty');
 
   const sendAgentInstruction = useCallback(
     async (text: string) => {
@@ -459,43 +445,59 @@ export default function PlanScreen() {
   );
 
   const startAgentDictation = useCallback(async () => {
-    if (agentDictating || agentBusy) {
+    if (agentDictating || agentBusy || startingDictationRef.current) {
       return;
     }
     if (!isSpeechRecognitionAvailable()) {
       setToast('Speech recognition is not available on this device');
       return;
     }
-    const granted = await requestSpeechRecognitionPermission();
-    if (!granted) {
-      setToast('Microphone permission is needed to talk');
-      return;
+    startingDictationRef.current = true;
+    const attempt = ++dictationAttempt.current;
+    try {
+      const granted = await requestSpeechRecognitionPermission();
+      if (attempt !== dictationAttempt.current) return;
+      if (!granted) {
+        setToast('Microphone permission is needed to talk');
+        return;
+      }
+      agentDictationRef.current = startLiveTranscription({
+        language: settings.language,
+        contextualStrings: recipes.map((recipe) => recipe.name),
+        onTranscript: setAgentText,
+        onError: (message) => {
+          setToast(message);
+          setAgentDictating(false);
+          agentDictationRef.current = null;
+        },
+      });
+      setAgentDictating(true);
+      void agentDictationRef.current.finished.then(() => {
+        if (attempt === dictationAttempt.current) setAgentDictating(false);
+      });
+    } catch (caught) {
+      setToast(caught instanceof Error ? caught.message : 'Could not start dictation');
+    } finally {
+      startingDictationRef.current = false;
     }
-    agentDictationRef.current = startLiveTranscription({
-      language: 'en',
-      contextualStrings: recipes.map((recipe) => recipe.name),
-      onError: (message) => {
-        setToast(message);
-        setAgentDictating(false);
-        agentDictationRef.current = null;
-      },
-    });
-    setAgentDictating(true);
-  }, [agentDictating, agentBusy, recipes]);
+  }, [agentDictating, agentBusy, recipes, settings.language]);
 
   const stopAgentDictation = useCallback(
     async (apply: boolean) => {
+      if (!apply) dictationAttempt.current += 1;
       const handle = agentDictationRef.current;
       agentDictationRef.current = null;
-      setAgentDictating(false);
       if (!handle) {
+        setAgentDictating(false);
         return;
       }
       if (!apply) {
         handle.abort();
+        setAgentDictating(false);
         return;
       }
       const result = await handle.stop();
+      setAgentDictating(false);
       const text = result?.text?.trim();
       if (text) {
         setAgentText(text);
@@ -619,60 +621,73 @@ export default function PlanScreen() {
 
         {!plan ? (
           <EmptyState message="Loading this week..." />
-        ) : !hasMeals ? (
-          <EmptyState message="This week is empty" actionLabel="Plan the week" onAction={handlePlanWeek} />
         ) : (
           dayPlans.map((day) => {
             const slots = plan.slots.filter((slot) => slot.day === day.day);
-            const wish = wishByDay.get(day.day);
-            const wishName = wish?.freeText ?? (wish?.recipeId != null ? recipeNameById.get(wish.recipeId) ?? null : null);
+            const meals = mealSettingsForDay(plan.budgets.find((budget) => budget.day === day.day) ?? day);
+            const isToday = day.date === todayDate();
+            const homeName = homeNameById.get(homeByDay.get(day.day) ?? activeHomeId);
             return (
-              <Card key={day.day} style={styles.card}>
+              <Card key={day.day} testID={`day-card-${day.day}`}
+                style={[styles.card, isToday ? {
+                  borderColor: theme.colors.primary,
+                  borderWidth: theme.spacing[1] / 2,
+                } : null]}>
                 <Card.Content>
                   <View style={styles.dayHeader}>
-                    <Text variant="titleMedium">{weekDayLabel(day.day)}</Text>
-                    <View style={[styles.dayMeta, { gap: theme.spacing[1] }]}>
-                      <Chip compact>{DAY_MODE_LABELS[day.mode]}</Chip>
-                      <Chip compact icon="clock-outline">
-                        {day.cookMinutes} min
-                      </Chip>
-                      <Chip compact icon="account-multiple">
-                        {day.servings}
-                      </Chip>
-                      {homeNameById.get(homeByDay.get(day.day) ?? activeHomeId) ? (
-                        <Chip compact icon="home-outline">
-                          {homeNameById.get(homeByDay.get(day.day) ?? activeHomeId)}
-                        </Chip>
-                      ) : null}
+                    <View style={{ flex: 1, gap: theme.spacing[1] }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.spacing[2], flexWrap: 'wrap' }}>
+                        <Text variant="titleSmall">{weekDayLabel(day.day)}</Text>
+                        {isToday ? <Text variant="labelMedium" accessibilityLabel="Today"
+                          style={{ color: theme.colors.onPrimaryContainer, backgroundColor: theme.colors.primaryContainer,
+                            borderRadius: theme.radii.pill, paddingHorizontal: theme.spacing[2], paddingVertical: theme.spacing[1] }}>
+                          Today
+                        </Text> : null}
+                      </View>
+                      <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
+                        {day.servings} people{homeName ? ` · ${homeName}` : ''}
+                      </Text>
+                    </View>
                       <IconButton
                         icon="tune"
                         size={18}
-                        onPress={() => openDayEditor(day, wish)}
+                        onPress={() => openDayEditor(day)}
+                        accessibilityRole="button"
                         accessibilityLabel={`Edit ${weekDayLabel(day.day)}`}
                       />
-                    </View>
                   </View>
-                  {wishName ? (
-                    <Chip compact icon="star-outline" style={{ marginTop: theme.spacing[2] }}>
-                      {wishName}
-                    </Chip>
+                  <Divider style={{ marginVertical: theme.spacing[1] }} />
+                  {meals.filter((meal) => meal.enabled || slots.some((slot) => slot.mealType === meal.mealType)).map((meal) => {
+                    const slot = slots.find((entry) => entry.mealType === meal.mealType);
+                    const label = slot?.kind === 'recipe' && slot.recipeId !== null
+                      ? recipeNameById.get(slot.recipeId) ?? 'Recipe'
+                      : slot?.kind === 'leftovers' ? 'Leftovers' : slot?.freeText ?? 'Not planned';
+                    return (
+                      <View key={meal.mealType} style={{ flexDirection: 'row', alignItems: 'center', gap: theme.spacing[2] }}>
+                        <View style={{ flex: 1, paddingVertical: theme.spacing[1] }}>
+                          <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+                            {MEAL_TYPE_LABELS[meal.mealType]} · {meal.mode === 'eating_out' ? 'Eating out' : `${meal.cookMinutes} min · ${DAY_MODE_LABELS[meal.mode]}`}
+                          </Text>
+                        {slot?.recipeId ? (
+                          <Pressable onPress={() => router.push(`/recipe/${slot.recipeId}`)}
+                            accessibilityRole="button" accessibilityLabel={`Open ${label}`}
+                            style={{ minHeight: theme.spacing[7], justifyContent: 'center' }}>
+                            <Text variant="bodyMedium" style={{ color: theme.colors.primary }}>
+                              {label}{slot.pinned ? ' · pinned' : ''}
+                            </Text>
+                          </Pressable>
+                        ) : <Text variant="bodyMedium">{label}{slot?.pinned ? ' · pinned' : ''}</Text>}
+                        </View>
+                        <IconButton icon="pencil-outline" size={18} onPress={() => openDayEditor(day, meal.mealType)}
+                          accessibilityRole="button" accessibilityLabel={`Edit ${weekDayLabel(day.day)} ${MEAL_TYPE_LABELS[meal.mealType]}`}
+                          testID={`slot-${meal.mealType}-${day.day}`} />
+                      </View>
+                    );
+                  })}
+                  {!meals.some((meal) => meal.mealType === 'snack' && meal.enabled) ? (
+                    <Button compact icon="plus" onPress={() => openDayEditor(day, 'snack')}
+                      accessibilityRole="button" accessibilityLabel={`Add snack on ${weekDayLabel(day.day)}`}>Add snack</Button>
                   ) : null}
-                  <Divider style={styles.divider} />
-                  {slots.length === 0 ? (
-                    <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-                      No meal planned
-                    </Text>
-                  ) : (
-                    slots.map((slot) => (
-                      <Text key={slot.id} variant="bodyMedium" style={styles.slot}>
-                        {slot.kind === 'recipe' && slot.recipeId !== null
-                          ? recipeNameById.get(slot.recipeId) ?? 'Recipe'
-                          : slot.kind === 'leftovers'
-                            ? 'Leftovers'
-                            : slot.freeText ?? 'Note'}
-                      </Text>
-                    ))
-                  )}
                 </Card.Content>
               </Card>
             );
@@ -686,7 +701,10 @@ export default function PlanScreen() {
         accessibilityLabel="Ask Banana to change the plan"
       />
       </View>
-      <AppDialog visible={agentOpen} onDismiss={() => setAgentOpen(false)}>
+      <AppDialog visible={agentOpen} onDismiss={() => {
+        void stopAgentDictation(false);
+        setAgentOpen(false);
+      }}>
         <AppDialog.Title>Change the plan</AppDialog.Title>
         <AppDialog.Content>
           <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
@@ -701,10 +719,10 @@ export default function PlanScreen() {
             style={{ marginTop: theme.spacing[3] }}
           />
           <Pressable
-            onPressIn={() => void startAgentDictation()}
-            onPressOut={() => void stopAgentDictation(true)}
+            onPress={() => void (agentDictating ? stopAgentDictation(true) : startAgentDictation())}
+            disabled={agentBusy}
             accessibilityRole="button"
-            accessibilityLabel="Hold to talk to Banana"
+            accessibilityLabel={agentDictating ? 'Stop and send to Banana' : 'Start talking to Banana'}
             accessibilityState={{ busy: agentDictating, disabled: agentBusy }}
             style={({ pressed }) => [
               styles.talkButton,
@@ -724,15 +742,15 @@ export default function PlanScreen() {
               color={theme.colors.onSurfaceVariant}
             />
             <Text variant="labelLarge">
-              {agentDictating ? 'Listening… release to send' : 'Hold to talk'}
+              {agentDictating ? 'Stop and send' : 'Start dictation'}
             </Text>
           </Pressable>
         </AppDialog.Content>
         <AppDialog.Actions>
-          <Button onPress={() => setAgentOpen(false)}>Cancel</Button>
+          <Button onPress={() => { void stopAgentDictation(false); setAgentOpen(false); }}>Cancel</Button>
           <Button
             loading={agentBusy}
-            disabled={agentBusy || agentText.trim() === ''}
+            disabled={agentBusy || agentDictating || agentText.trim() === ''}
             onPress={() => void sendAgentInstruction(agentText)}
           >
             Send
@@ -741,30 +759,49 @@ export default function PlanScreen() {
       </AppDialog>
       <AppDialog visible={editingDay !== null} onDismiss={closeDayEditor}>
         <AppDialog.Title>
-          {editingDay !== null ? weekDayLabel(editingDay) : 'Day'}
+          {editingDay !== null ? `${weekDayLabel(editingDay)} · ${MEAL_TYPE_LABELS[editMealType]}` : 'Meal'}
         </AppDialog.Title>
         <AppDialog.Content>
+          <KeyboardAwareScrollView style={{ maxHeight: theme.spacing[10] * 5 }}>
+          <OptionField label="Meal" value={editMealType}
+            options={MEAL_TYPES.map((value) => ({ value, label: MEAL_TYPE_LABELS[value] }))}
+            nullable={false} onChange={(value) => {
+              const day = dayPlans.find((entry) => entry.day === editingDay);
+              if (value && day) openDayEditor(day, value);
+            }} />
+          {editMealType === 'snack' ? (
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text>Plan a snack</Text>
+              <Switch value={editEnabled} onValueChange={setEditEnabled} accessibilityRole="switch"
+                accessibilityLabel="Plan a snack" accessibilityState={{ checked: editEnabled }} />
+            </View>
+          ) : null}
           <OptionField
-            label="Day type"
+            label="Meal mode"
             value={editMode}
-            options={DAY_MODE_OPTIONS}
+            options={MEAL_MODE_OPTIONS}
             nullable={false}
-            onChange={(value) => value !== null && setEditMode(value)}
+            onChange={(value) => {
+              if (value !== null) {
+                setEditMode(value);
+                setEditWishRecipeId(null);
+              }
+            }}
           />
           <NumberField
-            label="Cook minutes"
+            label="Cooking minutes for this meal"
             value={editMinutes}
             integer
             onChange={setEditMinutes}
           />
           <NumberField
-            label="People eating"
+            label="People eating that day"
             value={editServings}
             integer
             onChange={setEditServings}
           />
           <OptionField
-            label="Where"
+            label="Home for that day"
             value={editHomeId}
             options={homeOptions}
             emptyLabel="Main home"
@@ -816,10 +853,12 @@ export default function PlanScreen() {
               </Text>
             </View>
           </View>
+          </KeyboardAwareScrollView>
         </AppDialog.Content>
         <AppDialog.Actions>
           <Button onPress={closeDayEditor}>Cancel</Button>
-          <Button onPress={handleSaveDay}>Save</Button>
+          <Button disabled={busy || dictating} loading={busy} onPress={handleSaveDay}
+            accessibilityRole="button" accessibilityLabel="Save meal settings">Save</Button>
         </AppDialog.Actions>
       </AppDialog>
       <ScreenToast visible={toast !== null} message={toast} onDismiss={() => setToast(null)} />
@@ -878,17 +917,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  dayMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexShrink: 1,
-    flexWrap: 'wrap',
-    justifyContent: 'flex-end',
-  },
   divider: {
     marginVertical: 8,
-  },
-  slot: {
-    marginTop: 4,
   },
 });

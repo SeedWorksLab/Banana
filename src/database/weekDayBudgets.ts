@@ -1,6 +1,7 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { DAY_MODES } from '../models';
-import type { DayMode, WeekDay, WeekDayBudget } from '../models';
+import type { DayMode, MealSetting, WeekDay, WeekDayBudget } from '../models';
+import { parseMealSettings } from '../services/meal-settings-service';
 import { newUuid } from '../utils/uuid';
 import { getDatabase } from './database';
 
@@ -13,6 +14,7 @@ interface WeekDayBudgetRow {
   cook_minutes: number;
   servings: number | null;
   home_id: number | null;
+  meal_settings: string | null;
   created_at: string;
   updated_at: string | null;
 }
@@ -31,12 +33,13 @@ function rowToWeekDayBudget(row: WeekDayBudgetRow): WeekDayBudget {
     cookMinutes: row.cook_minutes,
     servings: row.servings,
     homeId: row.home_id,
+    mealSettings: parseMealSettings(row.meal_settings),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
-const SELECT = `SELECT id, uuid, week_id, day, mode, cook_minutes, servings, home_id,
+const SELECT = `SELECT id, uuid, week_id, day, mode, cook_minutes, servings, home_id, meal_settings,
                        created_at, updated_at
                   FROM week_day_budgets`;
 
@@ -96,6 +99,21 @@ export async function setWeekDayHome(
         SET home_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE week_id = ? AND day = ?`,
     [homeId, weekId, day]
+  );
+}
+
+export async function setWeekDayMealSettings(
+  weekId: number,
+  day: WeekDay,
+  settings: readonly MealSetting[],
+  db?: SQLiteDatabase
+): Promise<void> {
+  const database = db ?? (await getDatabase());
+  await database.runAsync(
+    `UPDATE week_day_budgets SET meal_settings = ?,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     WHERE week_id = ? AND day = ?`,
+    [JSON.stringify(settings), weekId, day]
   );
 }
 

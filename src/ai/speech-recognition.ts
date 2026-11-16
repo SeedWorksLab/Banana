@@ -1,7 +1,13 @@
 import { requireOptionalNativeModule } from 'expo-modules-core';
 
+export interface TranscriptionResult {
+  text: string;
+  confidence: number | null;
+}
+
 export interface LiveTranscriptionHandle {
-  stop(): Promise<{ text: string; confidence: number | null } | null>;
+  stop(): Promise<TranscriptionResult | null>;
+  finished: Promise<TranscriptionResult | null>;
   abort(): void;
 }
 
@@ -9,13 +15,15 @@ export interface LiveTranscriptionOptions {
   language: string | null;
   contextualStrings: string[];
   onError: (message: string) => void;
+  onTranscript?: (text: string) => void;
+  audioUri?: string;
+  timeoutMs?: number;
 }
 
 type SpeechRecognitionModule = typeof import('expo-speech-recognition')['ExpoSpeechRecognitionModule'];
-
 const STOP_TIMEOUT_MS = 8000;
-
 let cachedModule: SpeechRecognitionModule | null | undefined;
+let activeSession: LiveTranscriptionHandle | null = null;
 
 function speechModule(): SpeechRecognitionModule | null {
   if (cachedModule === undefined) {
@@ -26,87 +34,124 @@ function speechModule(): SpeechRecognitionModule | null {
 
 export function isSpeechRecognitionAvailable(): boolean {
   const module = speechModule();
-  return module !== null && module.isRecognitionAvailable();
+  return module !== null && module.isRecognitionAvailable() && module.supportsOnDeviceRecognition();
+}
+
+export function supportsRecordedTranscription(): boolean {
+  return isSpeechRecognitionAvailable() && Boolean(speechModule()?.supportsRecording());
 }
 
 export async function requestSpeechRecognitionPermission(): Promise<boolean> {
   const module = speechModule();
-  if (module === null) {
-    return false;
-  }
-  const response = await module.requestPermissionsAsync();
-  return response.granted;
+  if (module === null) return false;
+  return (await module.requestPermissionsAsync()).granted;
 }
 
 export function startLiveTranscription(options: LiveTranscriptionOptions): LiveTranscriptionHandle {
   const module = speechModule();
-  if (module === null) {
-    return { stop: async () => null, abort: () => {} };
+  if (!module || !isSpeechRecognitionAvailable()) {
+    throw new Error('On-device speech recognition is unavailable. Enable Android speech recognition and install your language in Android settings.');
+  }
+  if (activeSession !== null) {
+    throw new Error('Another dictation is running. Stop it before starting a new one.');
   }
 
-  let transcript = '';
+  const segments: string[] = [];
+  let interim = '';
   let confidence: number | null = null;
-  let stopped = false;
+  let ended = false;
+  let stopping = false;
+  let reportedError = false;
+  let stopTimer: ReturnType<typeof setTimeout> | undefined;
+  let resolveFinished!: (result: TranscriptionResult | null) => void;
+  const finished = new Promise<TranscriptionResult | null>((resolve) => { resolveFinished = resolve; });
+  const subscriptions: { remove(): void }[] = [];
+  const text = () => [...segments, interim].filter(Boolean).join(' ').trim();
 
-  const finish = new Promise<void>((resolve) => {
-    const stopTimer = setTimeout(resolve, STOP_TIMEOUT_MS);
+  function finish() {
+    if (ended) return;
+    ended = true;
+    clearTimeout(stopTimer);
+    subscriptions.forEach((subscription) => subscription.remove());
+    activeSession = null;
+    const transcript = text();
+    resolveFinished(transcript ? { text: transcript, confidence } : null);
+    if (!transcript && !reportedError) {
+      options.onError('No speech was recognised. Check your microphone and the offline speech language in Android settings.');
+    }
+  }
 
-    const onEnd = () => {
-      clearTimeout(stopTimer);
-      resolve();
-    };
-    const onError = (event: { message?: string; code?: string }) => {
-      options.onError(event.message ?? event.code ?? 'Speech recognition failed');
-      clearTimeout(stopTimer);
-      resolve();
-    };
-    const onResult = (event: {
-      isFinal: boolean;
-      results: { transcript: string; confidence: number }[];
-    }) => {
-      if (event.results.length > 0) {
-        transcript = event.results[0].transcript;
-        const raw = event.results[0].confidence;
-        confidence = raw >= 0 ? raw : null;
-      }
-      if (event.isFinal) {
-        clearTimeout(stopTimer);
-        resolve();
-      }
-    };
-
-    const resultSub = module.addListener('result', onResult as never);
-    const endSub = module.addListener('end', onEnd as never);
-    const errorSub = module.addListener('error', onError as never);
-
-    module.start({
-      lang: options.language ?? 'en',
-      interimResults: true,
-      continuous: true,
-      maxAlternatives: 1,
-      contextualStrings: options.contextualStrings,
-    });
-
-    finish.then(() => {
-      resultSub.remove();
-      endSub.remove();
-      errorSub.remove();
-      stopped = true;
-    });
-  });
-
-  return {
+  const handle: LiveTranscriptionHandle = {
+    finished,
     stop: async () => {
-      if (!stopped) {
-        module.stop();
-        await finish;
+      if (!ended && !stopping) {
+        stopping = true;
+        // The timeout begins at Stop, never while the user is still speaking.
+        stopTimer = setTimeout(() => {
+          finish();
+          module!.abort();
+        }, STOP_TIMEOUT_MS);
+        try { module.stop(); } catch { finish(); }
       }
-      return transcript === '' ? null : { text: transcript, confidence };
+      return finished;
     },
     abort: () => {
-      if (!stopped) {
-        module.abort();
-      }
+      if (ended) return;
+      reportedError = true;
+      segments.length = 0;
+      interim = '';
+      finish();
+      module.abort();
     },
   };
+  activeSession = handle;
+  subscriptions.push(
+    module.addListener('result', (event) => {
+      const result = event.results[0];
+      if (!result) return;
+      interim = result.transcript.trim();
+      confidence = result.confidence >= 0 ? result.confidence : null;
+      if (event.isFinal) {
+        if (interim) segments.push(interim);
+        interim = '';
+      }
+      options.onTranscript?.(text());
+    }),
+    module.addListener('end', finish),
+    module.addListener('error', (event) => {
+      reportedError = true;
+      finish();
+      options.onError(
+        event.error === 'language-not-supported'
+          ? 'Install the selected language for offline speech recognition in Android settings.'
+          : event.message || 'Speech recognition failed. Check Android speech recognition settings.'
+      );
+    }),
+  );
+  try {
+    module.start({
+      lang: ({ en: 'en-US', de: 'de-DE', hu: 'hu-HU' } as Record<string, string>)[options.language ?? 'en'] ?? options.language ?? 'en-US',
+      interimResults: true,
+      continuous: true,
+      requiresOnDeviceRecognition: true,
+      maxAlternatives: 1,
+      contextualStrings: options.contextualStrings,
+      ...(options.audioUri ? {
+        audioSource: { uri: options.audioUri, audioChannels: 1, sampleRate: 16000, audioEncoding: 2 },
+      } : {}),
+    });
+    if (options.audioUri && !ended) {
+      stopTimer = setTimeout(() => {
+        reportedError = true;
+        finish();
+        module.abort();
+        options.onError('Transcription timed out. The recording is kept so you can retry.');
+      }, options.timeoutMs ?? 300000);
+    }
+  } catch (error) {
+    reportedError = true;
+    finish();
+    throw error;
+  }
+  return handle;
 }

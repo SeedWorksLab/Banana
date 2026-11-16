@@ -6,6 +6,7 @@ import {
 } from '../../src/ai/agent';
 import type { PlanEditContext } from '../../src/ai/planner';
 import type { AiCompletion, AiCompletionRequest, AiProvider } from '../../src/ai/provider';
+import multiMealFixture from './fixtures/multi-meal-recipes.json';
 
 function fakeProvider(text: string): { provider: AiProvider; calls: AiCompletionRequest[] } {
   const calls: AiCompletionRequest[] = [];
@@ -40,6 +41,28 @@ const context: PlanEditContext = {
 };
 
 describe('AI agent', () => {
+  it('extracts all suitable meal tags and a zero-cook restaurant through a fake provider', async () => {
+    const { provider, calls } = fakeProvider(JSON.stringify(multiMealFixture));
+    const result = await runRecipeExtraction(provider, 'Toast works for all meals. Add our pizza place for lunch and dinner when eating out.');
+    expect(result.value.recipes[0].tags).toEqual(['breakfast', 'lunch', 'dinner']);
+    expect(result.value.recipes[1]).toMatchObject({
+      name: 'Pizza place', tags: ['lunch', 'dinner', 'eating_out'],
+      prepMinutes: 0, cookMinutes: 0, ingredients: [], steps: [],
+    });
+    expect(calls[0].messages[0].content).toContain('unless that particular day');
+  });
+
+  it('parses a meal-specific eating-out instruction without changing the other meals', async () => {
+    const { provider } = fakeProvider(JSON.stringify({ message: 'Lunch out.', actions: [
+      { type: 'set_meal', day: 'mon', mealType: 'lunch', mode: 'eating_out', cookMinutes: 0, enabled: true },
+      { type: 'set_slot', day: 'mon', mealType: 'lunch', recipeId: 4 },
+    ] }));
+    const result = await runPlanEdit(provider, context, 'Monday lunch at the pizza place, please.');
+    expect(result.value.actions[0]).toEqual({
+      type: 'set_meal', day: 'mon', mealType: 'lunch', mode: 'eating_out', cookMinutes: 0, enabled: true,
+    });
+    expect(result.value.actions).toHaveLength(2);
+  });
   it('passes the plan context and instruction to the provider', () => {
     const { provider, calls } = fakeProvider('{"message":"ok","actions":[]}');
     return runPlanEdit(provider, context, 'Move dinner to Tuesday').then((result) => {
@@ -52,7 +75,7 @@ describe('AI agent', () => {
       expect(result.value.message).toBe('ok');
       expect(result.meta).toMatchObject({
         promptId: 'plan-edit',
-        promptVersion: '1',
+        promptVersion: '2',
         model: 'test-model',
         inputTokens: 120,
         outputTokens: 45,

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { HelperText, Menu, TextInput as PaperTextInput } from 'react-native-paper';
 
 export interface Option<T extends string | number> {
@@ -36,15 +36,24 @@ export function OptionField<T extends string | number>({
         visible={open}
         onDismiss={() => setOpen(false)}
         anchor={
-          <PaperTextInput
-            label={label}
-            mode="outlined"
-            value={display}
-            editable={false}
-            error={Boolean(error)}
-            onPressIn={() => setOpen(true)}
-            right={<PaperTextInput.Icon icon="menu-down" onPress={() => setOpen(true)} />}
-          />
+          <Pressable
+            onPress={() => setOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel={`${label}: ${display}`}
+            accessibilityState={{ expanded: open }}
+            testID={`option-${label}`}
+          >
+            <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+              <PaperTextInput
+                label={label}
+                mode="outlined"
+                value={display}
+                editable={false}
+                error={Boolean(error)}
+                right={<PaperTextInput.Icon icon="menu-down" />}
+              />
+            </View>
+          </Pressable>
         }
       >
         {nullable ? (

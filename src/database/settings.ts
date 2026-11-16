@@ -2,14 +2,17 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 import { CURRENCIES, THEME_MODES, WEEK_DAYS } from '../models';
 import type { Currency, Settings, ThemeMode, WeekDay } from '../models';
 import { getDatabase } from './database';
+import { DEFAULT_LANGUAGE, isLanguage } from '../i18n/types';
 
 export const DEFAULT_SETTINGS: Settings = {
+  username: null,
+  language: DEFAULT_LANGUAGE,
   themeMode: 'system',
   currency: 'EUR',
   defaultServings: 2,
   defaultWeeknightMinutes: 45,
   defaultWeekendMinutes: 90,
-  dinnerOnly: true,
+  dinnerOnly: false,
   planStartDay: 'sat',
   notificationsEnabled: true,
   shoppingReminderHour: 9,
@@ -19,6 +22,8 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 type SettingsKey =
+  | 'username'
+  | 'language'
   | 'theme_mode'
   | 'currency'
   | 'default_servings'
@@ -33,6 +38,8 @@ type SettingsKey =
   | 'last_seen_release';
 
 const SETTINGS_KEY_MAP: Record<keyof Settings, SettingsKey> = {
+  username: 'username',
+  language: 'language',
   themeMode: 'theme_mode',
   currency: 'currency',
   defaultServings: 'default_servings',
@@ -74,6 +81,12 @@ function rowToSettings(rows: { key: SettingsKey; value: string }[]): Settings {
   const settings: Settings = { ...DEFAULT_SETTINGS };
   for (const row of rows) {
     switch (row.key) {
+      case 'username':
+        settings.username = row.value.trim() || null;
+        break;
+      case 'language':
+        settings.language = isLanguage(row.value) ? row.value : DEFAULT_LANGUAGE;
+        break;
       case 'theme_mode':
         settings.themeMode = parseThemeMode(row.value);
         break;
@@ -144,8 +157,12 @@ export async function updateSettings(
 ): Promise<Settings> {
   const database = db ?? (await getDatabase());
   const next: Settings = { ...(await getSettings(database)), ...patch };
-  for (const [field, key] of Object.entries(SETTINGS_KEY_MAP) as [keyof Settings, SettingsKey][]) {
-    const value = next[field];
+  for (const field of Object.keys(patch) as (keyof Settings)[]) {
+    const key = SETTINGS_KEY_MAP[field];
+    const value = field === 'username' ? next.username?.trim().slice(0, 80) ?? null : next[field];
+    if (field === 'username') {
+      next.username = value as string | null;
+    }
     const encoded =
       typeof value === 'boolean' ? (value ? '1' : '0') : value === null ? '' : String(value);
     await database.runAsync(

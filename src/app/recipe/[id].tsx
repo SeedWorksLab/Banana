@@ -9,7 +9,8 @@ import { EmptyState } from '../../components/empty-state';
 import { ScreenToast } from '../../components/screen-toast';
 import { useAppData } from '../../data/DataProvider';
 import { pantryCoverage } from '../../services/pantry-service';
-import { totalMinutes } from '../../services/recipe-service';
+import { totalMinutes, recipeMealTypes, isEatingOut } from '../../services/recipe-service';
+import { MEAL_TYPES } from '../../models';
 import { formatMinutes } from '../../utils/date';
 import { MEAL_TYPE_LABELS, UNIT_LABELS } from '../../utils/labels';
 
@@ -31,7 +32,7 @@ export default function RecipeDetailScreen() {
     replaceRecipeTags,
   } = useAppData();
 
-  const [showSteps, setShowSteps] = useState(false);
+  const [showSteps, setShowSteps] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
   const recipe = recipes.find((candidate) => candidate.id === recipeId) ?? null;
 
@@ -104,7 +105,8 @@ export default function RecipeDetailScreen() {
         </View>
         {recipe.description ? <Text variant="bodyMedium">{recipe.description}</Text> : null}
         <View style={styles.chips}>
-          <Chip compact>{MEAL_TYPE_LABELS[recipe.category]}</Chip>
+          {recipeMealTypes({ ...recipe, tags }).map((type) => <Chip key={type} compact>{MEAL_TYPE_LABELS[type]}</Chip>)}
+          {isEatingOut({ tags }) ? <Chip compact icon="storefront-outline">Eating out</Chip> : null}
           <Chip compact>{recipe.servings} servings</Chip>
           {recipe.isWish ? (
             <Chip compact icon="star-outline">
@@ -121,7 +123,7 @@ export default function RecipeDetailScreen() {
                 : `${coverage.missing.length} to buy`}
             </Chip>
           ) : null}
-          {tags.map((tag) => (
+          {tags.filter((tag) => !MEAL_TYPES.some((type) => type === tag) && tag !== 'eating_out').map((tag) => (
             <Chip key={tag} compact>
               {tag}
             </Chip>
@@ -150,7 +152,9 @@ export default function RecipeDetailScreen() {
               <Text variant="titleSmall" style={styles.grow}>
                 Steps
               </Text>
-              <Button compact onPress={() => setShowSteps((value) => !value)}>
+              <Button compact onPress={() => setShowSteps((value) => !value)}
+                accessibilityRole="button" accessibilityLabel={showSteps ? 'Hide recipe steps' : 'Show recipe steps'}
+                accessibilityState={{ expanded: showSteps }}>
                 {showSteps ? 'Hide' : 'Show'}
               </Button>
             </View>

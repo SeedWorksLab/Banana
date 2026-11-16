@@ -1,18 +1,25 @@
 import React, { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Button, Card, Switch, Text, TextInput } from 'react-native-paper';
 
 import { KeyboardAwareScrollView } from '../components/keyboard-aware-scroll-view';
 import { ScreenFade } from '../components/screen-fade';
 import { ScreenToast } from '../components/screen-toast';
 import { useAppData } from '../data/DataProvider';
+import { useI18n } from '../i18n';
+import { useAppTheme } from '../theme';
 
 export default function AiProviderScreen() {
+  const router = useRouter();
+  const { onboarding } = useLocalSearchParams<{ onboarding?: string }>();
+  const { t } = useI18n();
+  const theme = useAppTheme();
   const { aiState, saveAiState, clearAiCredentials } = useAppData();
   const [baseUrl, setBaseUrl] = useState(() => aiState.llmBaseUrl ?? '');
   const [apiKey, setApiKey] = useState(() => aiState.llmApiKey ?? '');
   const [model, setModel] = useState(() => aiState.llmModel ?? '');
-  const [enabled, setEnabled] = useState(aiState.enabled);
+  const [enabled, setEnabled] = useState(onboarding === '1' ? true : aiState.enabled);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -25,7 +32,13 @@ export default function AiProviderScreen() {
         llmModel: model.trim() === '' ? null : model.trim(),
         enabled,
       });
-      setToast('Saved');
+      if (onboarding === '1') {
+        router.replace('/(tabs)');
+      } else {
+        setToast(t('ai.saved'));
+      }
+    } catch {
+      setToast('Could not save the AI provider');
     } finally {
       setBusy(false);
     }
@@ -34,51 +47,52 @@ export default function AiProviderScreen() {
   async function handleClear() {
     await clearAiCredentials();
     setApiKey('');
-    setToast('Credentials cleared');
+    setToast(t('ai.cleared'));
   }
 
   return (
     <ScreenFade>
-      <KeyboardAwareScrollView contentContainerStyle={styles.container}>
+      <KeyboardAwareScrollView contentContainerStyle={[styles.container, { padding: theme.spacing[4] }]}>
         <Card mode="contained" style={styles.card}>
           <Card.Content>
             <Text variant="bodyMedium" style={styles.text}>
-              Banana works without AI. If you enable it, a provider you choose improves how weeks are
-              planned. The key stays on this device and is never included in a backup.
+              {t('ai.intro')}
             </Text>
             <TextInput
-              label="Base URL"
+              label={t('ai.baseUrl')}
+              accessibilityLabel={t('ai.baseUrl')}
               value={baseUrl}
               onChangeText={setBaseUrl}
               autoCapitalize="none"
               autoCorrect={false}
               mode="outlined"
-              placeholder="https://api.openai.com/v1"
-              style={styles.field}
+              style={{ marginBottom: theme.spacing[3] }}
             />
             <TextInput
-              label="API key"
+              label={t('ai.apiKey')}
+              accessibilityLabel={t('ai.apiKey')}
               value={apiKey}
               onChangeText={setApiKey}
               autoCapitalize="none"
               autoCorrect={false}
               secureTextEntry
               mode="outlined"
-              style={styles.field}
+              style={{ marginBottom: theme.spacing[3] }}
             />
             <TextInput
-              label="Model"
+              label={t('ai.model')}
+              accessibilityLabel={t('ai.model')}
               value={model}
               onChangeText={setModel}
               autoCapitalize="none"
               autoCorrect={false}
               mode="outlined"
-              placeholder="gpt-4o-mini"
-              style={styles.field}
+              style={{ marginBottom: theme.spacing[3] }}
             />
             <View style={styles.switchRow}>
-              <Text variant="bodyLarge">Enabled</Text>
-              <Switch value={enabled} onValueChange={setEnabled} />
+              <Text variant="bodyLarge">{t('ai.enabled')}</Text>
+              <Switch value={enabled} onValueChange={setEnabled} accessibilityRole="switch"
+                accessibilityLabel={t('ai.enabled')} accessibilityState={{ checked: enabled }} />
             </View>
             {aiState.lastError ? (
               <Text variant="bodySmall" style={styles.error}>
@@ -86,12 +100,17 @@ export default function AiProviderScreen() {
               </Text>
             ) : null}
             <View style={styles.actions}>
-              <Button mode="contained" loading={busy} disabled={busy} onPress={handleSave}>
-                Save
+              <Button mode="contained" loading={busy} disabled={busy} onPress={() => void handleSave()}
+                accessibilityRole="button" accessibilityLabel={onboarding === '1' ? t('ai.finish') : t('ai.save')}>
+                {onboarding === '1' ? t('ai.finish') : t('ai.save')}
               </Button>
-              <Button mode="outlined" disabled={busy} onPress={handleClear}>
-                Clear key
-              </Button>
+              {onboarding === '1' ? (
+                <Button mode="outlined" disabled={busy} onPress={() => router.replace('/(tabs)')}
+                  accessibilityRole="button" accessibilityLabel={t('ai.skip')}>{t('ai.skip')}</Button>
+              ) : (
+                <Button mode="outlined" disabled={busy} onPress={() => void handleClear()}
+                  accessibilityRole="button" accessibilityLabel={t('ai.clear')}>{t('ai.clear')}</Button>
+              )}
             </View>
           </Card.Content>
         </Card>
@@ -103,14 +122,9 @@ export default function AiProviderScreen() {
 
 const styles = StyleSheet.create({
   container: {
-    padding: 16,
   },
   card: {},
   text: {
-    marginBottom: 12,
-  },
-  field: {
-    marginBottom: 12,
   },
   switchRow: {
     flexDirection: 'row',

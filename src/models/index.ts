@@ -1,8 +1,21 @@
+import type { Language } from '../i18n/types';
+
 export const THEME_MODES = ['light', 'dark', 'system'] as const;
 export type ThemeMode = (typeof THEME_MODES)[number];
 
 export const MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack'] as const;
 export type MealType = (typeof MEAL_TYPES)[number];
+export const MAIN_MEAL_TYPES: readonly MealType[] = ['breakfast', 'lunch', 'dinner'];
+export const MEAL_MODES = ['cook', 'no_cook', 'leftovers', 'eating_out'] as const;
+export type MealMode = (typeof MEAL_MODES)[number];
+export const EATING_OUT_TAG = 'eating_out';
+
+export interface MealSetting {
+  mealType: MealType;
+  mode: MealMode;
+  cookMinutes: number;
+  enabled: boolean;
+}
 
 export const WEEK_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
 export type WeekDay = (typeof WEEK_DAYS)[number];
@@ -135,6 +148,8 @@ export const SLOT_EVENT_KINDS = [
 export type SlotEventKind = (typeof SLOT_EVENT_KINDS)[number];
 
 export interface Settings {
+  username: string | null;
+  language: Language;
   themeMode: ThemeMode;
   currency: Currency;
   defaultServings: number;
@@ -310,6 +325,7 @@ export interface WeekDayBudget {
   cookMinutes: number;
   servings: number | null;
   homeId: number | null;
+  mealSettings: MealSetting[];
   createdAt: string;
   updatedAt: string | null;
 }

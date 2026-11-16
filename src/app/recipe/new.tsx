@@ -1,23 +1,22 @@
 import React, { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Button, Text, TextInput } from 'react-native-paper';
+import { Button, Chip, Switch, Text, TextInput } from 'react-native-paper';
 
 import { KeyboardAwareScrollView } from '../../components/keyboard-aware-scroll-view';
 import { NumberField } from '../../components/number-field';
 import { OptionField } from '../../components/option-field';
 import { ScreenFade } from '../../components/screen-fade';
 import { useAppData } from '../../data/DataProvider';
-import { MEAL_TYPES, UNITS, type MealType, type Unit } from '../../models';
+import { EATING_OUT_TAG, MEAL_TYPES, UNITS, type MealType, type Unit } from '../../models';
+import { recipeMealTypes, isEatingOut } from '../../services/recipe-service';
+import { useAppTheme } from '../../theme';
 import { MEAL_TYPE_LABELS, UNIT_LABELS } from '../../utils/labels';
 
-const CATEGORY_OPTIONS = MEAL_TYPES.map((category) => ({
-  value: category,
-  label: MEAL_TYPE_LABELS[category],
-}));
 const UNIT_OPTIONS = UNITS.map((unit) => ({ value: unit, label: UNIT_LABELS[unit] }));
 
 export default function RecipeEditorScreen() {
+  const theme = useAppTheme();
   const router = useRouter();
   const params = useLocalSearchParams<{ id?: string }>();
   const recipeId = params.id ? Number(params.id) : null;
@@ -37,7 +36,10 @@ export default function RecipeEditorScreen() {
   const existing = recipeId !== null ? recipes.find((recipe) => recipe.id === recipeId) ?? null : null;
 
   const [name, setName] = useState(existing?.name ?? '');
-  const [category, setCategory] = useState<MealType>(existing?.category ?? 'dinner');
+  const existingTags = recipeTags.filter((tag) => tag.recipeId === recipeId).map((tag) => tag.tag);
+  const [mealTypes, setMealTypes] = useState<MealType[]>(() =>
+    existing ? recipeMealTypes({ category: existing.category, tags: existingTags }) : ['dinner']);
+  const [eatingOut, setEatingOut] = useState(() => isEatingOut({ tags: existingTags }));
   const [servings, setServings] = useState<number | null>(existing?.servings ?? 2);
   const [prepMinutes, setPrepMinutes] = useState<number | null>(existing?.prepMinutes ?? 10);
   const [cookMinutes, setCookMinutes] = useState<number | null>(existing?.cookMinutes ?? 20);
@@ -46,7 +48,8 @@ export default function RecipeEditorScreen() {
     recipeId !== null
       ? recipeTags
           .filter((tag) => tag.recipeId === recipeId)
-          .map((tag) => tag.tag)
+           .map((tag) => tag.tag)
+           .filter((tag) => !MEAL_TYPES.some((type) => type === tag) && tag !== EATING_OUT_TAG)
           .join(', ')
       : ''
   );
@@ -73,7 +76,7 @@ export default function RecipeEditorScreen() {
   );
 
   async function handleSave() {
-    if (name.trim() === '' || servings === null || prepMinutes === null || cookMinutes === null) {
+    if (name.trim() === '' || mealTypes.length === 0 || servings === null || prepMinutes === null || cookMinutes === null) {
       return;
     }
     setBusy(true);
@@ -81,7 +84,7 @@ export default function RecipeEditorScreen() {
       const input = {
         name: name.trim(),
         description: description.trim() === '' ? null : description.trim(),
-        category,
+        category: mealTypes[0],
         source: existing?.source ?? ('own'),
         isBuiltin: existing?.isBuiltin ?? false,
         isFavorite: existing?.isFavorite ?? false,
@@ -119,10 +122,10 @@ export default function RecipeEditorScreen() {
       );
       await replaceRecipeTags(
         id,
-        tagsText
+        [...mealTypes, ...(eatingOut ? [EATING_OUT_TAG] : []), ...tagsText
           .split(',')
           .map((tag) => tag.trim())
-          .filter((tag) => tag !== '')
+          .filter((tag) => tag !== '' && !MEAL_TYPES.some((type) => type === tag) && tag !== EATING_OUT_TAG)]
       );
       if (router.canGoBack()) {
         router.back();
@@ -143,13 +146,27 @@ export default function RecipeEditorScreen() {
           mode="outlined"
           multiline
         />
-        <OptionField
-          label="Category"
-          value={category}
-          options={CATEGORY_OPTIONS}
-          nullable={false}
-          onChange={(value) => value !== null && setCategory(value)}
-        />
+        <Text variant="titleSmall">Suitable meals (select one or more)</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing[2] }}>
+          {MEAL_TYPES.map((type) => (
+            <Chip key={type} selected={mealTypes.includes(type)} accessibilityRole="checkbox"
+              accessibilityLabel={`Suitable for ${MEAL_TYPE_LABELS[type]}`}
+              accessibilityState={{ checked: mealTypes.includes(type) }} testID={`recipe-meal-${type}`}
+              onPress={() => setMealTypes((current) => current.includes(type)
+                ? current.filter((entry) => entry !== type) : [...current, type])}>
+              {MEAL_TYPE_LABELS[type]}
+            </Chip>
+          ))}
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Text>Eating out</Text>
+          <Switch value={eatingOut} onValueChange={(value) => {
+            setEatingOut(value);
+            if (value) { setPrepMinutes(0); setCookMinutes(0); }
+          }} accessibilityRole="switch"
+            accessibilityLabel="Eating out" accessibilityState={{ checked: eatingOut }} testID="recipe-eating-out" />
+        </View>
+        {eatingOut ? <Text variant="bodySmall">A place or meal bought outside, such as a pizza place. Planned only for meals marked Eating out.</Text> : null}
         <TextInput
           label="Tags"
           value={tagsText}
@@ -238,7 +255,8 @@ export default function RecipeEditorScreen() {
           Add step
         </Button>
 
-        <Button mode="contained" loading={busy} disabled={busy} onPress={handleSave} style={styles.save}>
+        <Button mode="contained" loading={busy} disabled={busy || mealTypes.length === 0} onPress={handleSave} style={styles.save}
+          accessibilityRole="button" accessibilityLabel={existing ? 'Save recipe' : 'Create recipe'}>
           {existing ? 'Save recipe' : 'Create recipe'}
         </Button>
       </KeyboardAwareScrollView>

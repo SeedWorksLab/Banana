@@ -4,6 +4,8 @@ import {
   filterRecipes,
   matchesQuery,
   totalMinutes,
+  recipeMealTypes,
+  isEatingOut,
   type RecipeSummary,
 } from '../../src/services/recipe-service';
 
@@ -96,5 +98,25 @@ describe('filterRecipes', () => {
 
   it('combines query and category', () => {
     expect(filterRecipes(recipes, { query: 'porridge', category: 'breakfast' }).map((r) => r.id)).toEqual([3]);
+  });
+});
+describe('meal tags', () => {
+  it('filters a recipe by each of its suitable meals, not just its legacy category', () => {
+    const toast = recipe({ tags: ['breakfast', 'lunch', 'dinner'] });
+    for (const category of ['breakfast', 'lunch', 'dinner'] as const) {
+      expect(filterRecipes([toast], { category })).toEqual([toast]);
+    }
+    expect(filterRecipes([toast], { category: 'snack' })).toEqual([]);
+  });
+  it('falls back to the legacy category and accepts multiple explicit meal tags', () => {
+    expect(recipeMealTypes({ category: 'dinner', tags: [] })).toEqual(['dinner']);
+    expect(recipeMealTypes({ category: 'dinner', tags: ['Breakfast', 'lunch', 'dinner'] }))
+      .toEqual(['breakfast', 'lunch', 'dinner']);
+    expect(recipeMealTypes({ category: 'dinner', tags: ['breakfast'] })).toEqual(['breakfast']);
+  });
+  it('recognises the eating-out tag', () => {
+    expect(isEatingOut({ tags: ['eating_out'] })).toBe(true);
+    expect(isEatingOut({ tags: ['Eating out'] })).toBe(true);
+    expect(isEatingOut({ tags: ['comfort'] })).toBe(false);
   });
 });

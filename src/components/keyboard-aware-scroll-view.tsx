@@ -15,12 +15,12 @@ export interface KeyboardAwareScrollViewProps extends ScrollViewProps {
  * On Android the window already resizes, so only the extra bottom padding is
  * added; on iOS `automaticallyAdjustKeyboardInsets` handles the rest.
  */
-export function KeyboardAwareScrollView({
+export const KeyboardAwareScrollView = React.forwardRef<ScrollView, KeyboardAwareScrollViewProps>(function KeyboardAwareScrollView({
   keyboardBottomOffset = 24,
   contentContainerStyle,
   children,
   ...rest
-}: KeyboardAwareScrollViewProps) {
+}: KeyboardAwareScrollViewProps, ref) {
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   useEffect(() => {
@@ -36,6 +36,7 @@ export function KeyboardAwareScrollView({
 
   return (
     <ScrollView
+      ref={ref}
       keyboardShouldPersistTaps="handled"
       automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
       contentContainerStyle={[
@@ -47,4 +48,4 @@ export function KeyboardAwareScrollView({
       {children}
     </ScrollView>
   );
-}
+});

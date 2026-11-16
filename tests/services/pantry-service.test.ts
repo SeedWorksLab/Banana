@@ -36,13 +36,23 @@ describe('shortage', () => {
     expect(shortage({ quantity: 100, unit: 'g' }, item({ level: 'stocked', quantity: 150, unit: 'g' }))).toBeNull();
   });
 
-  it('treats low and out as needing everything', () => {
-    expect(shortage({ quantity: 100, unit: 'g' }, item({ level: 'low', quantity: 90, unit: 'g' }))).toEqual({ quantity: 100, unit: 'g' });
+  it('uses known low stock but treats out as empty', () => {
+    expect(shortage({ quantity: 100, unit: 'g' }, item({ level: 'low', quantity: 90, unit: 'g' }))).toEqual({ quantity: 10, unit: 'g' });
     expect(shortage({ quantity: 100, unit: 'g' }, item({ level: 'out', quantity: 0, unit: 'g' }))).toEqual({ quantity: 100, unit: 'g' });
   });
 
   it('needs everything when the units cannot be compared', () => {
     expect(shortage({ quantity: 100, unit: 'g' }, item({ level: 'stocked', quantity: 3, unit: 'piece' }))).toEqual({ quantity: 100, unit: 'g' });
+  });
+
+  it('uses rough stock levels only when no quantity is known', () => {
+    expect(shortage({ quantity: 700, unit: 'g' }, item({ level: 'stocked' }))).toBeNull();
+    expect(shortage({ quantity: 700, unit: 'g' }, item({ level: 'low' }))).toEqual({ quantity: 700, unit: 'g' });
+  });
+
+  it('does not confuse grams and millilitres', () => {
+    expect(shortage({ quantity: 700, unit: 'g' }, item({ quantity: 500, unit: 'ml' })))
+      .toEqual({ quantity: 700, unit: 'g' });
   });
 
   it('needs nothing for a non-positive requirement', () => {

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Button, Card, Chip, FAB, Searchbar, Text, TextInput } from 'react-native-paper';
@@ -18,7 +18,7 @@ import {
   type LiveTranscriptionHandle,
 } from '../../ai/speech-recognition';
 import { buildRecipeSummaries } from '../../data/selectors';
-import { filterRecipes, totalMinutes } from '../../services/recipe-service';
+import { filterRecipes, totalMinutes, recipeMealTypes, isEatingOut } from '../../services/recipe-service';
 import { MEAL_TYPES, type MealType } from '../../models';
 import { MEAL_TYPE_LABELS } from '../../utils/labels';
 import { formatMinutes } from '../../utils/date';
@@ -26,16 +26,23 @@ import { formatMinutes } from '../../utils/date';
 export default function RecipesScreen() {
   const router = useRouter();
   const theme = useAppTheme();
-  const { recipes, recipeTags, createRecipesFromText } = useAppData();
+  const { settings, recipes, recipeTags, createRecipesFromText } = useAppData();
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<MealType | null>(null);
   const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [eatingOutOnly, setEatingOutOnly] = useState(false);
   const [dictationOpen, setDictationOpen] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [dictating, setDictating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const dictationRef = useRef<LiveTranscriptionHandle | null>(null);
+  const startingRef = useRef(false);
+  const dictationAttempt = useRef(0);
+  useEffect(() => () => {
+    dictationAttempt.current += 1;
+    dictationRef.current?.abort();
+  }, []);
 
   const summaries = useMemo(() => buildRecipeSummaries(recipes, recipeTags), [recipes, recipeTags]);
   const visible = useMemo(
@@ -43,50 +50,62 @@ export default function RecipesScreen() {
       filterRecipes(summaries, {
         query,
         category: category ?? undefined,
-        favoriteOnly,
+         favoriteOnly,
+          tags: eatingOutOnly ? ['eating_out'] : [],
       }),
-    [summaries, query, category, favoriteOnly]
+    [summaries, query, category, favoriteOnly, eatingOutOnly]
   );
 
   const startDictation = useCallback(async () => {
-    if (dictating) {
+    if (dictating || startingRef.current) {
       return;
     }
     if (!isSpeechRecognitionAvailable()) {
       setToast('Speech recognition is not available on this device');
       return;
     }
-    const granted = await requestSpeechRecognitionPermission();
-    if (!granted) {
-      setToast('Microphone permission is needed to dictate');
-      return;
+    startingRef.current = true;
+    const attempt = ++dictationAttempt.current;
+    try {
+      const granted = await requestSpeechRecognitionPermission();
+      if (attempt !== dictationAttempt.current) return;
+      if (!granted) {
+        setToast('Microphone permission is needed to dictate');
+        return;
+      }
+      dictationRef.current = startLiveTranscription({
+        language: settings.language,
+        contextualStrings: recipes.map((recipe) => recipe.name),
+        onTranscript: (text) => setTranscript([transcript.trim(), text].filter(Boolean).join('\n')),
+        onError: (message) => {
+          setToast(message);
+          setDictating(false);
+          dictationRef.current = null;
+        },
+      });
+      setDictating(true);
+      void dictationRef.current.finished.then(() => {
+        if (attempt === dictationAttempt.current) setDictating(false);
+      });
+    } catch (caught) {
+      setToast(caught instanceof Error ? caught.message : 'Could not start dictation');
+    } finally {
+      startingRef.current = false;
     }
-    dictationRef.current = startLiveTranscription({
-      language: 'en',
-      contextualStrings: recipes.map((recipe) => recipe.name),
-      onError: (message) => {
-        setToast(message);
-        setDictating(false);
-        dictationRef.current = null;
-      },
-    });
-    setDictating(true);
-  }, [dictating, recipes]);
+  }, [dictating, recipes, settings.language, transcript]);
 
   const stopDictation = useCallback(async () => {
     const handle = dictationRef.current;
     dictationRef.current = null;
-    setDictating(false);
     if (!handle) {
       return;
     }
-    const result = await handle.stop();
-    if (result?.text) {
-      setTranscript((current) => [current.trim(), result.text.trim()].filter(Boolean).join('\n'));
-    }
+    await handle.stop();
+    setDictating(false);
   }, []);
 
   const closeDictation = useCallback(() => {
+    dictationAttempt.current += 1;
     dictationRef.current?.abort();
     dictationRef.current = null;
     setDictating(false);
@@ -119,8 +138,13 @@ export default function RecipesScreen() {
           onChangeText={setQuery}
           style={styles.search}
         />
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-          <Chip selected={favoriteOnly} onPress={() => setFavoriteOnly((value) => !value)}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}
+          testID="recipe-filters"
+          style={{ flexGrow: 0, flexShrink: 0 }}
+          contentContainerStyle={{ gap: theme.spacing[2], paddingHorizontal: theme.spacing[4], paddingVertical: theme.spacing[2], alignItems: 'center' }}>
+          <Chip selected={favoriteOnly} onPress={() => setFavoriteOnly((value) => !value)}
+            accessibilityRole="checkbox" accessibilityLabel="Filter favorite recipes"
+            accessibilityState={{ checked: favoriteOnly }}>
             Favorites
           </Chip>
           {MEAL_TYPES.map((mealType) => (
@@ -128,12 +152,19 @@ export default function RecipesScreen() {
               key={mealType}
               selected={category === mealType}
               onPress={() => setCategory((value) => (value === mealType ? null : mealType))}
+              accessibilityRole="checkbox" accessibilityLabel={`Filter ${MEAL_TYPE_LABELS[mealType]}`}
+              accessibilityState={{ checked: category === mealType }}
             >
               {MEAL_TYPE_LABELS[mealType]}
             </Chip>
           ))}
+          <Chip selected={eatingOutOnly} onPress={() => setEatingOutOnly((value) => !value)}
+            accessibilityRole="checkbox" accessibilityLabel="Filter eating out"
+            accessibilityState={{ checked: eatingOutOnly }}>
+            Eating out
+          </Chip>
         </ScrollView>
-        <KeyboardAwareScrollView contentContainerStyle={styles.list}>
+        <KeyboardAwareScrollView style={{ flex: 1 }} contentContainerStyle={styles.list}>
           {visible.length === 0 ? (
             <EmptyState
               message="No recipes match"
@@ -148,12 +179,15 @@ export default function RecipesScreen() {
                 onPress={() => router.push(`/recipe/${recipe.id}`)}
               >
                 <Card.Content>
-                  <View style={styles.row}>
-                    <Text variant="titleMedium">{recipe.name}</Text>
-                    <Text variant="bodySmall">{formatMinutes(totalMinutes(recipe))}</Text>
+                  <View style={[styles.row, { gap: theme.spacing[2], alignItems: 'flex-start' }]}>
+                    <Text variant="titleMedium" style={{ flex: 1, minWidth: 0 }}
+                      testID={`recipe-name-${recipe.id}`}>{recipe.name}</Text>
+                    <Text variant="bodySmall" style={{ flexShrink: 0 }}
+                      testID={`recipe-duration-${recipe.id}`}>{formatMinutes(totalMinutes(recipe))}</Text>
                   </View>
-                  <View style={styles.metaRow}>
-                    <Chip compact>{MEAL_TYPE_LABELS[recipe.category]}</Chip>
+                  <View style={[styles.metaRow, { flexWrap: 'wrap' }]}>
+                    {recipeMealTypes(recipe).map((type) => <Chip key={type} compact>{MEAL_TYPE_LABELS[type]}</Chip>)}
+                    {isEatingOut(recipe) ? <Chip compact>Eating out</Chip> : null}
                     {recipe.isFavorite ? (
                       <Chip compact icon="heart">
                         Favorite
@@ -199,10 +233,10 @@ export default function RecipesScreen() {
             style={{ marginTop: theme.spacing[3], minHeight: 120 }}
           />
           <Pressable
-            onPressIn={() => void startDictation()}
-            onPressOut={() => void stopDictation()}
+            onPress={() => void (dictating ? stopDictation() : startDictation())}
+            disabled={busy}
             accessibilityRole="button"
-            accessibilityLabel="Hold to dictate the recipe"
+            accessibilityLabel={dictating ? 'Stop recipe dictation' : 'Start recipe dictation'}
             accessibilityState={{ busy: dictating, disabled: busy }}
             style={({ pressed }) => [
               styles.talkButton,
@@ -221,14 +255,14 @@ export default function RecipesScreen() {
               size={22}
               color={theme.colors.onSurfaceVariant}
             />
-            <Text variant="labelLarge">{dictating ? 'Listening…' : 'Hold to talk'}</Text>
+            <Text variant="labelLarge">{dictating ? 'Stop dictation' : 'Start dictation'}</Text>
           </Pressable>
         </AppDialog.Content>
         <AppDialog.Actions>
           <Button onPress={closeDictation}>Cancel</Button>
           <Button
             loading={busy}
-            disabled={busy || transcript.trim() === ''}
+            disabled={busy || dictating || transcript.trim() === ''}
             onPress={() => void saveDictation()}
           >
             Save recipes
@@ -247,11 +281,6 @@ const styles = StyleSheet.create({
   search: {
     margin: 16,
     marginBottom: 8,
-  },
-  chips: {
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingBottom: 8,
   },
   list: {
     padding: 16,

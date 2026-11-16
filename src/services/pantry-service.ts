@@ -23,9 +23,8 @@ export function findPantryItem<T extends PantryLookupItem>(
 
 /**
  * How much of a required amount still has to be bought once the pantry is
- * counted. `stocked` subtracts what is on hand; `low` and `out` mean the whole
- * amount is needed, because "low" is treated as effectively empty. A `null`
- * result means nothing needs buying.
+ * counted. Known amounts override rough stocked/low levels; out always means
+ * buy everything. Without an amount, stocked means enough and low needs a top-up.
  */
 export function shortage(
   required: RequiredQuantity,
@@ -34,8 +33,11 @@ export function shortage(
   if (required.quantity <= 0) {
     return null;
   }
-  if (item === null || item.level !== 'stocked' || item.quantity === null || item.unit === null) {
+  if (item === null || item.level === 'out') {
     return { ...required };
+  }
+  if (item.quantity === null || item.unit === null) {
+    return item.level === 'stocked' ? null : { ...required };
   }
   const available = convert(item.quantity, item.unit, required.unit);
   if (available === null) {
@@ -78,8 +80,7 @@ export interface PantryCoverage {
 
 /**
  * Splits the ingredients a recipe needs into what is already in the house and
- * what still has to be bought. "Low" counts as needing a top-up, mirroring
- * `shortage` so the recipe view and the shopping list never disagree.
+ * what still has to be bought. Without recipe quantities, "low" is a top-up hint.
  */
 export function pantryCoverage(
   ingredientIds: readonly number[],

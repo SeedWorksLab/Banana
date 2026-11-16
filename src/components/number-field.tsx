@@ -57,6 +57,7 @@ export function NumberField({
     <>
       <PaperTextInput
         label={label}
+        accessibilityLabel={label}
         mode="outlined"
         value={text}
         onChangeText={handleChange}

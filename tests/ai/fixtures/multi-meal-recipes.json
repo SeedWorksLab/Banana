@@ -1,0 +1,29 @@
+{
+  "message": "Saved toast and your pizza place.",
+  "recipes": [
+    {
+      "name": "Toast",
+      "description": null,
+      "category": "breakfast",
+      "tags": ["breakfast", "lunch", "dinner"],
+      "servings": 1,
+      "prepMinutes": 2,
+      "cookMinutes": 3,
+      "isWish": false,
+      "ingredients": [{"name": "Bread", "quantity": 2, "unit": "slice", "category": "bakery", "shelfLifeDays": null, "optional": false}],
+      "steps": ["Toast the bread."]
+    },
+    {
+      "name": "Pizza place",
+      "description": "Our local restaurant",
+      "category": "lunch",
+      "tags": ["lunch", "dinner", "eating_out"],
+      "servings": 2,
+      "prepMinutes": 0,
+      "cookMinutes": 0,
+      "isWish": false,
+      "ingredients": [],
+      "steps": []
+    }
+  ]
+}

@@ -283,7 +283,9 @@ separate from `src/services/`, which stays pure.
 
 **Non-negotiable AI rules** (identical to Cherry):
 
-1. No local inference, ever. No on-device model, no bundled weights.
+1. No local LLM inference or bundled weights. User-approved exception:
+   dictation uses Android's built-in on-device speech recognizer; audio stays
+   local. Expo Audio is approved for background leaflet recording.
 2. Credentials are never hardcoded, never logged, never committed, never included
    in a backup, and never sent anywhere except the configured base URL.
 3. Network failures never destroy data. A failed AI call is inert.

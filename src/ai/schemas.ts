@@ -3,12 +3,14 @@ import {
   DAY_MODES,
   INGREDIENT_CATEGORIES,
   MEAL_TYPES,
+  MEAL_MODES,
   UNITS,
   WEEK_DAYS,
   type Currency,
   type DayMode,
   type IngredientCategory,
   type MealType,
+  type MealMode,
   type Unit,
   type WeekDay,
 } from '../models';
@@ -55,6 +57,7 @@ export type PlanEditAction =
       servings: number | null;
     }
   | { type: 'clear_slot'; day: WeekDay; mealType: MealType }
+  | { type: 'set_meal'; day: WeekDay; mealType: MealType; mode: MealMode; cookMinutes: number | null; enabled: boolean }
   | {
       type: 'set_day';
       day: WeekDay;
@@ -202,6 +205,10 @@ export function parseAgentRecipe(value: unknown, fallbackWish = false): AgentRec
   const tags = readArray(value.tags)
     .map((tag) => readString(tag))
     .filter((tag): tag is string => tag !== null);
+  const normalizedTags = tags.map((tag) => {
+    const normalized = tag.toLowerCase().replace(/[ -]/g, '_');
+    return normalized === 'eating_out' || MEAL_TYPES.some((type) => type === normalized) ? normalized : tag;
+  });
   const steps = readArray(value.steps)
     .map((step) => readString(step))
     .filter((step): step is string => step !== null);
@@ -209,10 +216,10 @@ export function parseAgentRecipe(value: unknown, fallbackWish = false): AgentRec
     name,
     description: readString(value.description),
     servings: readPositiveInt(value.servings, 2),
-    prepMinutes: readPositiveInt(value.prepMinutes, 10),
-    cookMinutes: readPositiveInt(value.cookMinutes, 20),
+    prepMinutes: Math.max(0, Math.round(readNumber(value.prepMinutes) ?? 10)),
+    cookMinutes: Math.max(0, Math.round(readNumber(value.cookMinutes) ?? 20)),
     category: readEnum(value.category, MEAL_TYPES) ?? 'dinner',
-    tags,
+    tags: [...new Set(normalizedTags)],
     isWish: readBool(value.isWish) || fallbackWish,
     ingredients,
     steps,
@@ -266,6 +273,16 @@ function parsePlanEditAction(value: unknown): PlanEditAction | null {
     return day === null
       ? null
       : { type, day, mealType: readEnum(value.mealType, MEAL_TYPES) ?? 'dinner' };
+  }
+  if (type === 'set_meal') {
+    const day = readEnum(value.day, WEEK_DAYS);
+    const mealType = readEnum(value.mealType, MEAL_TYPES);
+    const mode = readEnum(value.mode, MEAL_MODES);
+    if (!day || !mealType || !mode) return null;
+    return {
+      type, day, mealType, mode, enabled: value.enabled === undefined ? true : readBool(value.enabled),
+      cookMinutes: readNumber(value.cookMinutes) === null ? null : Math.max(0, Math.round(readNumber(value.cookMinutes) ?? 0)),
+    };
   }
   if (type === 'set_day') {
     const day = readEnum(value.day, WEEK_DAYS);

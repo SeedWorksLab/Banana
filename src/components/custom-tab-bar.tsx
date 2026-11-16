@@ -6,6 +6,7 @@ import type { BottomTabBarProps } from 'expo-router/tabs';
 import type { ComponentProps } from 'react';
 import { useAppTheme } from '../theme';
 import type { BananaTheme } from '../theme';
+import { useI18n } from '../i18n';
 
 const TAB_ICONS: Record<string, ComponentProps<typeof MaterialCommunityIcons>['name']> = {
   index: 'calendar-week-outline',
@@ -45,7 +46,7 @@ function TabItem({
           styles.indicator,
           {
             backgroundColor: isFocused ? theme.colors.primaryContainer : 'transparent',
-            borderRadius: theme.radii.xl,
+             borderRadius: theme.radii.pill,
             paddingHorizontal: theme.spacing[4],
             paddingVertical: theme.spacing[1],
           },
@@ -53,29 +54,37 @@ function TabItem({
       >
         <MaterialCommunityIcons name={icon} color={color} size={24} />
       </View>
-      <Text variant="labelSmall" style={[styles.label, { color }]} numberOfLines={1}>
+      <Text variant="labelSmall" style={{ color }} numberOfLines={1}>
         {label}
       </Text>
     </Pressable>
   );
 }
 
-export function CustomTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
+export function CustomTabBar({ state, descriptors, navigation, insets }: BottomTabBarProps) {
   const theme = useAppTheme();
+  const { t } = useI18n();
   return (
     <View
       style={[
         styles.bar,
-        {
-          backgroundColor: theme.colors.surface,
-          borderTopColor: theme.borders.border,
+          {
+            backgroundColor: theme.colors.surface,
+            borderTopColor: theme.borders.border,
+            paddingTop: theme.spacing[1],
+             paddingBottom: insets.bottom + theme.spacing[2],
         },
       ]}
     >
       {state.routes.map((route, index) => {
         const { options } = descriptors[route.key];
         const isFocused = state.index === index;
-        const label = options.title ?? route.name;
+        const label = route.name === 'index' ? t('nav.plan')
+          : route.name === 'recipes' ? t('nav.recipes')
+          : route.name === 'shopping' ? t('nav.shopping')
+          : route.name === 'deals' ? t('nav.deals')
+          : route.name === 'settings' ? t('nav.settings')
+          : options.title ?? route.name;
         const onPress = () => {
           const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
           if (!isFocused && !event.defaultPrevented) {
@@ -103,8 +112,6 @@ const styles = StyleSheet.create({
   bar: {
     flexDirection: 'row',
     borderTopWidth: StyleSheet.hairlineWidth,
-    paddingTop: 4,
-    paddingBottom: 8,
   },
   tabItem: {
     flex: 1,
@@ -114,8 +121,6 @@ const styles = StyleSheet.create({
   indicator: {
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  label: {
-    marginTop: 2,
+    overflow: 'hidden',
   },
 });

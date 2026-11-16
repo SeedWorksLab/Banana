@@ -138,6 +138,21 @@ describe('buildShoppingList', () => {
     expect(list.lines.find((l) => l.label === 'Flour')).toBeUndefined();
   });
 
+  it('subtracts approximate butter once from the combined meals for the same home', () => {
+    const list = buildShoppingList({
+      meals: [
+        meal({ homeId: 1, ingredients: [ing({ name: 'Butter', category: 'dairy', quantity: 0.3, unit: 'kg' })] }),
+        meal({ homeId: 1, ingredients: [ing({ name: 'Butter', category: 'dairy', quantity: 400, unit: 'g' })] }),
+        meal({ homeId: 2, ingredients: [ing({ name: 'Butter', category: 'dairy', quantity: 700, unit: 'g' })] }),
+      ],
+      pantryItems: [{ homeId: 1, ingredientId: 1, level: 'low', quantity: 500, unit: 'g' }],
+    });
+    expect(list.lines.map(({ homeId, quantity, unit }) => ({ homeId, quantity, unit }))).toEqual([
+      { homeId: 1, quantity: 200, unit: 'g' },
+      { homeId: 2, quantity: 700, unit: 'g' },
+    ]);
+  });
+
   it('shows a large amount in kilos', () => {
     const list = buildShoppingList({
       meals: [meal({ ingredients: [ing({ ingredientId: 1, name: 'Potatoes', category: 'produce', unit: 'g', quantity: 1500 })] })],

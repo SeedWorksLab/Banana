@@ -1,62 +1,42 @@
 import React, { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Card, Divider, List, Switch, Text, TextInput } from 'react-native-paper';
+import { Card, Divider, List, Switch, Text } from 'react-native-paper';
 
 import { ScreenFade } from '../../components/screen-fade';
 import { KeyboardAwareScrollView } from '../../components/keyboard-aware-scroll-view';
-import { NumberField } from '../../components/number-field';
 import { ScreenToast } from '../../components/screen-toast';
 import { OptionField } from '../../components/option-field';
 import { useAppData } from '../../data/DataProvider';
-import { COUNTRIES, CURRENCIES, DIETS, THEME_MODES } from '../../models';
-import { isStoreSupported } from '../../deals/providers';
+import { CURRENCIES, THEME_MODES } from '../../models';
 import { requestNotificationPermission } from '../../services/notifications';
-import { COUNTRY_LABELS, DIET_LABELS } from '../../utils/labels';
-import {
-  CURRENCY_LABELS,
-  currencySymbol,
-  formatCents,
-  fromMinorUnits,
-  toMinorUnits,
-} from '../../utils/currency';
+import { LANGUAGES, useI18n, type Language } from '../../i18n';
+import { CURRENCY_LABELS } from '../../utils/currency';
 
-const THEME_OPTIONS = THEME_MODES.map((mode) => ({
-  value: mode,
-  label: mode.charAt(0).toUpperCase() + mode.slice(1),
-}));
 const CURRENCY_OPTIONS = CURRENCIES.map((currency) => ({
   value: currency,
   label: CURRENCY_LABELS[currency],
 }));
-const DIET_OPTIONS = DIETS.map((diet) => ({ value: diet, label: DIET_LABELS[diet] }));
-
-function splitList(text: string): string[] {
-  return text
-    .split(',')
-    .map((value) => value.trim())
-    .filter((value) => value !== '');
-}
 
 export default function SettingsScreen() {
   const router = useRouter();
+  const { t } = useI18n();
+  const themeOptions = THEME_MODES.map((mode) => ({
+    value: mode,
+    label: mode === 'light' ? t('settings.themeLight')
+      : mode === 'dark' ? t('settings.themeDark') : t('settings.themeSystem'),
+  }));
   const {
     settings,
-    preferences,
-    stores,
     saveSettings,
-    savePreferences,
-    setStoreEnabled,
   } = useAppData();
-  const [allergiesText, setAllergiesText] = useState(() => preferences.allergies.join(', '));
-  const [dislikesText, setDislikesText] = useState(() => preferences.dislikes.join(', '));
   const [toast, setToast] = useState<string | null>(null);
 
   async function toggleNotifications(value: boolean) {
     if (value) {
       const granted = await requestNotificationPermission();
       if (!granted) {
-        setToast('Notifications are blocked in the system settings');
+        setToast(t('settings.notificationsBlocked'));
         await saveSettings({ notificationsEnabled: false });
         return;
       }
@@ -69,82 +49,55 @@ export default function SettingsScreen() {
       <KeyboardAwareScrollView contentContainerStyle={styles.content}>
         <Card>
           <Card.Content>
-            <Text variant="titleMedium">Appearance</Text>
+            <Text variant="titleMedium">{t('settings.appearance')}</Text>
             <OptionField
-              label="Theme"
+              label={t('settings.theme')}
               value={settings.themeMode}
-              options={THEME_OPTIONS}
+              options={themeOptions}
               nullable={false}
               onChange={(value) => value !== null && void saveSettings({ themeMode: value })}
             />
+            <OptionField
+              label={t('settings.language')}
+              value={settings.language}
+              options={LANGUAGES.map(({ code, nativeLabel }) => ({ value: code, label: nativeLabel }))}
+              nullable={false}
+              onChange={(value) => value !== null && void saveSettings({ language: value as Language })}
+            />
+            <Text variant="bodySmall">{t('settings.languageHint')}</Text>
           </Card.Content>
         </Card>
 
         <Card>
           <Card.Content>
-            <Text variant="titleMedium">Currency</Text>
+            <Text variant="titleMedium">{t('settings.currency')}</Text>
             <OptionField
-              label="Budget and list currency"
+              label={t('settings.currencyLabel')}
               value={settings.currency}
               options={CURRENCY_OPTIONS}
               nullable={false}
               onChange={(value) => value !== null && void saveSettings({ currency: value })}
             />
             <Text variant="bodySmall">
-              Store offers stay in their own currency. Amounts are not converted.
+              {t('settings.currencyHint')}
             </Text>
           </Card.Content>
         </Card>
 
         <Card>
           <Card.Content>
-            <Text variant="titleMedium">Planning defaults</Text>
-            <NumberField
-              label="Default servings"
-              value={settings.defaultServings}
-              integer
-              onChange={(value) => value !== null && void saveSettings({ defaultServings: value })}
-            />
-            <NumberField
-              label="Weeknight cook minutes"
-              value={settings.defaultWeeknightMinutes}
-              integer
-              onChange={(value) =>
-                value !== null && void saveSettings({ defaultWeeknightMinutes: value })
-              }
-            />
-            <NumberField
-              label="Weekend cook minutes"
-              value={settings.defaultWeekendMinutes}
-              integer
-              onChange={(value) =>
-                value !== null && void saveSettings({ defaultWeekendMinutes: value })
-              }
-            />
-            <View style={styles.switchRow}>
-              <Text variant="bodyLarge">Dinner only</Text>
-              <Switch
-                value={settings.dinnerOnly}
-                onValueChange={(value) => void saveSettings({ dinnerOnly: value })}
-              />
-            </View>
-          </Card.Content>
-        </Card>
-
-        <Card>
-          <Card.Content>
-            <Text variant="titleMedium">Reminders</Text>
+            <Text variant="titleMedium">{t('settings.reminders')}</Text>
             <View style={styles.switchRow}>
               <View style={styles.flex}>
-                <Text variant="bodyLarge">Plan updates</Text>
+                <Text variant="bodyLarge">{t('settings.planUpdates')}</Text>
                 <Text variant="bodySmall">
-                  A quiet notification when Banana changes your plan.
+                  {t('settings.planUpdatesHint')}
                 </Text>
               </View>
               <Switch
                 value={settings.notificationsEnabled}
                 onValueChange={(value) => void toggleNotifications(value)}
-                accessibilityLabel="Notify me when the plan changes"
+                accessibilityLabel={t('settings.planUpdates')}
                 accessibilityState={{ checked: settings.notificationsEnabled }}
               />
             </View>
@@ -152,122 +105,87 @@ export default function SettingsScreen() {
         </Card>
 
         <Card>
-          <Card.Content>
-            <Text variant="titleMedium">Preferences</Text>
-            <OptionField
-              label="Diet"
-              value={preferences.diet}
-              options={DIET_OPTIONS}
-              nullable={false}
-              onChange={(value) => value !== null && void savePreferences({ diet: value })}
-            />
-            <TextInput
-              label="Allergies"
-              value={allergiesText}
-              onChangeText={setAllergiesText}
-              onBlur={() => void savePreferences({ allergies: splitList(allergiesText) })}
-              mode="outlined"
-              placeholder="comma separated"
-            />
-            <TextInput
-              label="Dislikes"
-              value={dislikesText}
-              onChangeText={setDislikesText}
-              onBlur={() => void savePreferences({ dislikes: splitList(dislikesText) })}
-              mode="outlined"
-              placeholder="comma separated"
-            />
-            <NumberField
-              label="Weekly budget"
-              unit={currencySymbol(settings.currency)}
-              value={fromMinorUnits(preferences.weeklyBudgetCents, settings.currency)}
-              onChange={(value) =>
-                value !== null &&
-                void savePreferences({
-                  weeklyBudgetCents: toMinorUnits(value, settings.currency),
-                })
-              }
-              helperText={formatCents(preferences.weeklyBudgetCents, settings.currency)}
-            />
-          </Card.Content>
-        </Card>
-
-        <Card>
-          <Card.Content>
-            <Text variant="titleMedium">Shops</Text>
-            <Text variant="bodySmall">
-              Deals are fetched only from enabled shops. Unavailable shops have no public offer
-              feed yet.
-            </Text>
-          </Card.Content>
-          {COUNTRIES.map((country) => (
-            <View key={country}>
-              <List.Subheader>{COUNTRY_LABELS[country]}</List.Subheader>
-              {stores
-                .filter((store) => store.country === country)
-                .map((store) => {
-                  const supported = isStoreSupported(store.storeId);
-                  return (
-                    <List.Item
-                      key={store.id}
-                      title={store.name}
-                      description={supported ? undefined : 'No public offer feed found'}
-                      right={() => (
-                        <Switch
-                          value={store.enabled}
-                          disabled={!supported}
-                          onValueChange={(value) => void setStoreEnabled(store.id, value)}
-                          accessibilityLabel={`Enable ${store.name} offers`}
-                          accessibilityState={{ checked: store.enabled, disabled: !supported }}
-                        />
-                      )}
-                    />
-                  );
-                })}
-            </View>
-          ))}
-        </Card>
-
-        <Card>
           <List.Item
-            title="Pantry and homes"
-            description="What is in each home and use-by dates"
+            title={t('settings.preferencesDefaults')}
+            description={t('settings.preferencesDefaultsHint')}
+            left={(props) => <List.Icon {...props} icon="tune" />}
+            right={(props) => <List.Icon {...props} icon="chevron-right" />}
+            onPress={() => router.push('/preferences-defaults')}
+            accessibilityRole="button"
+            accessibilityLabel={t('settings.preferencesDefaults')}
+            testID="settings-preferences-defaults"
+          />
+          <Divider />
+          <List.Item
+            title={t('settings.shops')}
+            description={t('settings.shopsMenuHint')}
+            left={(props) => <List.Icon {...props} icon="storefront-outline" />}
+            right={(props) => <List.Icon {...props} icon="chevron-right" />}
+            onPress={() => router.push('/shops')}
+            accessibilityRole="button"
+            accessibilityLabel={t('settings.shops')}
+            testID="settings-shops"
+          />
+          <Divider />
+          <List.Item
+             title={t('settings.pantry')}
+             description={t('settings.pantryHint')}
             left={(props) => <List.Icon {...props} icon="fridge-outline" />}
             right={(props) => <List.Icon {...props} icon="chevron-right" />}
             onPress={() => router.push('/pantry')}
           />
           <Divider />
           <List.Item
-            title="AI provider"
-            description="Endpoint, key and model"
+            title="Known ingredients"
+            description="Add ingredients and correct their names, units and details"
+            left={(props) => <List.Icon {...props} icon="food-variant" />}
+            right={(props) => <List.Icon {...props} icon="chevron-right" />}
+            onPress={() => router.push('/ingredients')}
+            accessibilityRole="button"
+            accessibilityLabel="Known ingredients"
+          />
+          <Divider />
+          <List.Item
+             title={t('sync.title')}
+             description={t('sync.description')}
+            left={(props) => <List.Icon {...props} icon="cloud-sync-outline" />}
+            right={(props) => <List.Icon {...props} icon="chevron-right" />}
+            onPress={() => router.push('/seedworks' as never)}
+            accessibilityRole="button"
+            accessibilityLabel={t('sync.title')}
+           />
+           <Divider />
+           <List.Item
+             title={t('settings.ai')}
+             description={t('settings.aiHint')}
             left={(props) => <List.Icon {...props} icon="robot-outline" />}
             right={(props) => <List.Icon {...props} icon="chevron-right" />}
             onPress={() => router.push('/ai-provider')}
           />
           <Divider />
           <List.Item
-            title="Backup and restore"
+             title={t('settings.backup')}
             left={(props) => <List.Icon {...props} icon="database-outline" />}
             right={(props) => <List.Icon {...props} icon="chevron-right" />}
             onPress={() => router.push('/backup')}
           />
           <Divider />
           <List.Item
-            title="Tutorial"
+             title={t('settings.tutorial')}
             left={(props) => <List.Icon {...props} icon="school-outline" />}
             right={(props) => <List.Icon {...props} icon="chevron-right" />}
-            onPress={() => router.push('/tutorial')}
+            onPress={() => router.push('/tutorial?replay=1')}
           />
           <Divider />
           <List.Item
-            title="What's new"
+             title={t('settings.whatsNew')}
             left={(props) => <List.Icon {...props} icon="gift-outline" />}
             right={(props) => <List.Icon {...props} icon="chevron-right" />}
             onPress={() => router.push('/whats-new')}
           />
           <Divider />
           <List.Item
-            title="About"
+             title={t('settings.about')}
             left={(props) => <List.Icon {...props} icon="information-outline" />}
             right={(props) => <List.Icon {...props} icon="chevron-right" />}
             onPress={() => router.push('/about')}

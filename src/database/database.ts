@@ -9,6 +9,9 @@ export function getDatabase(): Promise<SQLiteDatabase> {
     dbPromise = openDatabaseAsync(DATABASE_NAME).then(async (db) => {
       await db.execAsync('PRAGMA journal_mode = WAL;');
       await migrate(db);
+      await db.runAsync(
+        "UPDATE sync_meta SET value = '0' WHERE key = 'pull_in_progress'"
+      );
       return db;
     });
   }
@@ -47,7 +50,7 @@ export async function migrate(db: SQLiteDatabase): Promise<void> {
           await db.execAsync(migration.sql);
         }
         if (migration.apply) {
-          await migration.apply(db);
+          await migration.apply(db, currentVersion);
         }
         await db.execAsync(`PRAGMA user_version = ${migration.id}`);
       } catch (caught) {
