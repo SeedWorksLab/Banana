@@ -1,5 +1,10 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { SQLiteDatabase } from 'expo-sqlite';
+import { planBatchCooking } from '../services/batch-cooking-service';
+import { useCloudSync } from '../sync/use-cloud-sync';
+import { switchDataContext } from '../database/data-contexts';
+import { subscribeToDataChanges } from '../sync/realtime';
+import { getChangeCount } from '../database/change-count';
 import type {
   AiRun,
   AiRunKind,
@@ -32,9 +37,9 @@ import type {
   WeekStatus,
 } from '../models';
 import { getDatabase } from '../database/database';
-import { DEFAULT_SETTINGS, getSettings, updateSettings } from '../database/settings';
+import { DEFAULT_SETTINGS, getSettings, updateSettings, clearLocalUsername } from '../database/settings';
 import { DEFAULT_SYNC_STATE, getSyncState, updateSyncState, type SyncState } from '../database/syncState';
-import { getSyncMeta } from '../database/syncMeta';
+import { getSyncMeta, setSyncMeta } from '../database/syncMeta';
 import { seedWorksConfig } from '../sync/cloud';
 import { syncNow, type SyncResult } from '../sync/engine';
 import { getSignedInUser, signInToSeedWorks, signOutOfSeedWorks } from '../sync/supabase';
@@ -276,6 +281,7 @@ export interface AppData {
     mealType?: MealType
   ) => Promise<void>;
   createSlot: (input: SlotInput) => Promise<number>;
+  cookForDays: (weekId: number, day: WeekDay, mealType: MealType, recipeId: number, days: number, servings: number, cookMinutes: number, homeId: number | null) => Promise<void>;
   updateSlot: (id: number, input: Omit<SlotInput, 'weekId'>) => Promise<void>;
   deleteSlot: (id: number) => Promise<void>;
   setSlotRating: (id: number, rating: number | null) => Promise<void>;
@@ -299,6 +305,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [syncState, setSyncState] = useState<SyncState>(DEFAULT_SYNC_STATE);
   const [seedWorksEmail, setSeedWorksEmail] = useState<string | null>(null);
+  const [dataContext, setDataContext] = useState<string | null>(null);
   const [aiState, setAiState] = useState<AiState>(DEFAULT_AI_STATE);
   const [preferences, setPreferences] = useState<Preferences>(DEFAULT_PREFERENCES);
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
@@ -358,6 +365,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         getAiRuns(50, db),
       ]);
       setSettings(nextSettings);
+      setDataContext(await getSyncMeta('active_data_context', db));
       setSyncState(nextSyncState);
       setAiState(nextAiState);
       setPreferences(nextPreferences);
@@ -379,6 +387,22 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       setError(caught instanceof Error ? caught.message : 'Failed to load local data');
     }
   }, []);
+
+  const syncTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const queueCloudSync = useCallback(() => {
+    clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(() => {
+      void syncNow().then(async (result) => {
+        if (result) await refresh();
+      }).catch(async () => { await refresh(); });
+    }, 750);
+  }, [refresh]);
+  useEffect(() => () => { clearTimeout(syncTimer.current); }, []);
+
+  useCloudSync(ready && syncState.enabled && seedWorksEmail !== null, async () => {
+    await syncNow();
+    await refresh();
+  }, subscribeToDataChanges, dataContext);
 
   useEffect(() => {
     let active = true;
@@ -409,7 +433,10 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<AppData>(() => {
     const withDb = async <T,>(fn: (db: SQLiteDatabase) => Promise<T>): Promise<T> => {
       const db = await getDatabase();
-      return fn(db);
+      const before = await getChangeCount(db);
+      const result = await fn(db);
+      if (await getChangeCount(db) !== before) queueCloudSync();
+      return result;
     };
 
     const provider: AiProvider | null =
@@ -602,18 +629,23 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         const user = await signInToSeedWorks(email.trim(), password);
         const db = await getDatabase();
         const linked = await getSyncMeta('sync_identity_binding', db);
-        if (linked && linked !== user.id) {
-          await signOutOfSeedWorks();
-          throw new Error('This local data is linked to another SeedWorks account.');
-        }
+        const profileAccount = await getSyncMeta('profile_account_binding', db) ?? linked;
+        if (profileAccount && profileAccount !== user.id) await clearLocalUsername(db);
+        await setSyncMeta('profile_account_binding', user.id, db);
+        if (linked && linked !== user.id) await switchDataContext(user.id, user.id, db);
         setSeedWorksEmail(user.email ?? null);
         setSyncState(await updateSyncState({ enabled: true }, db));
         return syncSeedWorks();
       },
       signOutSeedWorks: async () => {
+        setSyncState(await updateSyncState({ enabled: false }));
+        await syncNow().catch(() => null);
+        const user = await getSignedInUser();
+        if (user) await switchDataContext(user.id, user.id);
         await signOutOfSeedWorks();
         setSeedWorksEmail(null);
         setSyncState(await updateSyncState({ enabled: false }));
+        await refresh();
       },
       syncSeedWorks,
       saveAiState: async (patch) => {
@@ -835,8 +867,12 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
           }, db);
           await setWeekDayMealSettings(weekId, day,
             replaceMealSetting(mealSettingsForDay(current ?? { mode: 'cook', cookMinutes: settings.defaultWeeknightMinutes }), meal), db);
-          const slots = (await getSlotsByWeek(weekId, db)).filter((slot) => slot.day === day && slot.mealType === meal.mealType);
+          const weekSlots = await getSlotsByWeek(weekId, db);
+          const slots = weekSlots.filter((slot) => slot.day === day && slot.mealType === meal.mealType);
           for (const slot of slots) {
+            if (slot.batchSourceUuid && meal.mode === 'leftovers' && meal.enabled) continue;
+            if (slot.uuid && weekSlots.some((entry) => entry.batchSourceUuid === slot.uuid) &&
+              meal.mode === 'cook' && meal.enabled) continue;
             const recipe = recipes.find((entry) => entry.id === slot.recipeId);
             const tags = recipeTags.filter((tag) => tag.recipeId === slot.recipeId).map((tag) => tag.tag);
             if (!meal.enabled || (recipe && !allowsRecipeForMeal({ ...recipe, tags }, meal))) {
@@ -857,6 +893,9 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
             (slot) => slot.day === day && slot.mealType === mealType
           );
           const text = freeText?.trim() || null;
+          if (existing?.batchSourceUuid) {
+            throw new Error('Edit the original cooking day to change a batch meal.');
+          }
           if (recipeId !== null) {
             const recipe = recipes.find((entry) => entry.id === recipeId);
             const budget = (await getWeekDayBudgets(weekId, db)).find((entry) => entry.day === day);
@@ -875,6 +914,10 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
           const kind = recipeId !== null ? 'recipe' : 'free_text';
           const resolvedText = recipeId !== null ? null : text;
           if (existing) {
+            for (const reserved of slots.filter((slot) => slot.batchSourceUuid === existing.uuid && existing.uuid !== null)) {
+              if (reserved.cookedAt !== null) throw new Error('A reserved leftover meal is already eaten.');
+              await deleteSlotRow(reserved.id, db);
+            }
             await updateSlotRow(
               existing.id,
               {
@@ -907,6 +950,74 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
             },
             db
           );
+        });
+      },
+      cookForDays: async (weekId, day, mealType, recipeId, days, servings, cookMinutes, homeId) => {
+        const batch = planBatchCooking(day, days, servings);
+        await withDb(async (db) => {
+          await db.withTransactionAsync(async () => {
+            const slots = await getSlotsByWeek(weekId, db);
+            const affectedDays = [day, ...batch.leftoverDays];
+            const affected = slots.filter((slot) => affectedDays.includes(slot.day) && slot.mealType === mealType);
+            if (affected.some((slot) => slot.cookedAt !== null)) {
+              throw new Error('A meal in this batch is already cooked. Choose other days.');
+            }
+            const source = slots.find((slot) => slot.day === day && slot.mealType === mealType);
+            if (source?.batchSourceUuid) throw new Error('Edit the original cooking day for this batch.');
+            if (source?.uuid && slots.some((slot) => slot.batchSourceUuid === source.uuid && slot.cookedAt !== null)) {
+              throw new Error('A reserved leftover meal is already eaten.');
+            }
+            const budgets = await getWeekDayBudgets(weekId, db);
+            const sourceHome = homeId ?? defaultHome?.id ?? null;
+            if (batch.leftoverDays.some((leftoverDay) =>
+              (budgets.find((budget) => budget.day === leftoverDay)?.homeId ?? defaultHome?.id ?? null) !== sourceHome)) {
+              throw new Error('Batch meals must be in the same home.');
+            }
+            const recipe = recipes.find((entry) => entry.id === recipeId);
+            const tags = recipeTags.filter((tag) => tag.recipeId === recipeId).map((tag) => tag.tag);
+            if (!recipe || !allowsRecipeForMeal({ ...recipe, tags },
+              { mealType, mode: 'cook', cookMinutes, enabled: true })) throw new Error('Choose a suitable home-cooked recipe.');
+            for (const slot of affected) {
+              if (slot.batchSourceUuid && slot.batchSourceUuid !== source?.uuid) {
+                throw new Error('A selected meal belongs to another batch.');
+              }
+            }
+            const sourceBudget = budgets.find((budget) => budget.day === day);
+            const sourceMinutes = sourceBudget?.cookMinutes ??
+              (day === 'sat' || day === 'sun' ? settings.defaultWeekendMinutes : settings.defaultWeeknightMinutes);
+            await upsertWeekDayBudget({
+              weekId, day, mode: sourceBudget?.mode ?? 'cook',
+              cookMinutes: sourceMinutes, servings, homeId,
+            }, db);
+            await setWeekDayMealSettings(weekId, day,
+              replaceMealSetting(mealSettingsForDay(sourceBudget ?? { mode: 'cook', cookMinutes: sourceMinutes }),
+                { mealType, mode: 'cook', cookMinutes, enabled: true }), db);
+            for (const slot of affected) await deleteSlotRow(slot.id, db);
+            const sourceId = await createSlotRow({
+              weekId, day, mealType, kind: 'recipe', recipeId, freeText: null,
+              servings: batch.cookServings, note: null, pinned: true, sortOrder: slots.length,
+            }, db);
+            const newSource = (await getSlotsByWeek(weekId, db)).find((slot) => slot.id === sourceId);
+            if (!newSource?.uuid) throw new Error('Could not reserve this batch.');
+            for (const leftoverDay of batch.leftoverDays) {
+              await createSlotRow({
+                weekId, day: leftoverDay, mealType, kind: 'leftovers', recipeId, freeText: null,
+                servings: batch.mealServings, note: null, pinned: true,
+                sortOrder: slots.length + affectedDays.indexOf(leftoverDay),
+                batchSourceUuid: newSource.uuid,
+              }, db);
+              const budget = (await getWeekDayBudgets(weekId, db)).find((row) => row.day === leftoverDay);
+              const defaultMinutes = leftoverDay === 'sat' || leftoverDay === 'sun'
+                ? settings.defaultWeekendMinutes : settings.defaultWeeknightMinutes;
+              if (!budget) await upsertWeekDayBudget({
+                weekId, day: leftoverDay, mode: 'cook',
+                cookMinutes: defaultMinutes, servings, homeId: sourceHome,
+              }, db);
+              await setWeekDayMealSettings(weekId, leftoverDay,
+                replaceMealSetting(mealSettingsForDay(budget ?? { mode: 'cook', cookMinutes: defaultMinutes }),
+                  { mealType, mode: 'leftovers', cookMinutes: 0, enabled: true }), db);
+            }
+          });
         });
       },
       createSlot: async (input) => withDb((db) => createSlotRow(input, db)),
@@ -1100,6 +1211,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     refreshingDeals,
     lastDealRefresh,
     refresh,
+    queueCloudSync,
   ]);
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
@@ -1173,6 +1285,7 @@ function buildAgentContext(input: AgentContextInput): PlanEditContext {
       };
     }),
     slots: input.slots.map((slot) => ({
+      uuid: slot.uuid,
       day: slot.day,
       mealType: slot.mealType,
       kind: slot.kind,
@@ -1182,6 +1295,7 @@ function buildAgentContext(input: AgentContextInput): PlanEditContext {
       servings: slot.servings,
       pinned: slot.pinned,
       cookedAt: slot.cookedAt,
+      batchSourceUuid: slot.batchSourceUuid,
     })),
     recipes: input.recipes
       .filter((recipe) => !recipe.isWish)

@@ -6,6 +6,7 @@ import { KeyboardAwareScrollView } from '../components/keyboard-aware-scroll-vie
 import { AppDialog } from '../components/app-dialog';
 import { OptionField } from '../components/option-field';
 import { NumberField } from '../components/number-field';
+import { ScrollableTextInput } from '../components/scrollable-text-input';
 import { ScreenToast } from '../components/screen-toast';
 import { useAppData } from '../data/DataProvider';
 import { useAppTheme } from '../theme';
@@ -112,7 +113,7 @@ export default function IngredientsScreen() {
                 accessibilityRole="switch" accessibilityLabel="Pantry staple"
                 accessibilityState={{ checked: input.isPantryStaple }} />
             </View>
-            <TextInput mode="outlined" label="Notes" multiline value={input.notes ?? ''}
+            <ScrollableTextInput mode="outlined" label="Notes" multiline value={input.notes ?? ''}
               onChangeText={(notes) => setInput({ ...input, notes })} accessibilityLabel="Ingredient notes" />
           </KeyboardAwareScrollView>
         </AppDialog.Content>

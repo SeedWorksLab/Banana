@@ -46,7 +46,7 @@ export function useLeafletRecording(language: string, contextualStrings: string[
         throw new Error('Recorded transcription needs Android 13 or newer and an installed on-device speech recognizer.');
       }
       if (!(await AudioModule.requestRecordingPermissionsAsync()).granted ||
-          !(await requestSpeechRecognitionPermission())) {
+          !(await requestSpeechRecognitionPermission(language))) {
         throw new Error('Allow microphone access to record a leaflet.');
       }
       if (!(await requestPermissionsAsync()).granted) {
@@ -78,6 +78,7 @@ export function useLeafletRecording(language: string, contextualStrings: string[
       const recordingUri = uri ?? recorder.uri;
       if (!recordingUri) throw new Error('No recorded audio was found. Start recording first.');
       setUri(recordingUri);
+      if (!(await requestSpeechRecognitionPermission(language))) throw new Error('Allow microphone access to transcribe the leaflet.');
       await setAudioModeAsync({ allowsRecording: false, allowsBackgroundRecording: false });
       let failure: string | null = null;
       const handle = startLiveTranscription({

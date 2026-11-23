@@ -15,6 +15,7 @@ export interface SlotInput {
   note: string | null;
   pinned?: boolean;
   sortOrder: number;
+  batchSourceUuid?: string | null;
 }
 
 interface SlotRow {
@@ -35,6 +36,7 @@ interface SlotRow {
   created_at: string;
   updated_at: string | null;
   deleted: number;
+  batch_source_uuid: string | null;
 }
 
 function parseKind(value: string): SlotKind {
@@ -60,11 +62,12 @@ function rowToSlot(row: SlotRow): Slot {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deleted: row.deleted === 1,
+    batchSourceUuid: row.batch_source_uuid,
   };
 }
 
 const SELECT = `SELECT id, uuid, week_id, day, meal_type, kind, recipe_id, free_text, servings,
-                       note, pinned, cooked_at, rating, sort_order, created_at, updated_at, deleted
+                       note, pinned, cooked_at, rating, sort_order, created_at, updated_at, deleted, batch_source_uuid
                   FROM slots`;
 
 export async function getSlotsByWeek(weekId: number, db?: SQLiteDatabase): Promise<Slot[]> {
@@ -97,8 +100,8 @@ export async function createSlot(input: SlotInput, db?: SQLiteDatabase): Promise
   const database = db ?? (await getDatabase());
   const result = await database.runAsync(
     `INSERT INTO slots
-       (uuid, week_id, day, meal_type, kind, recipe_id, free_text, servings, note, pinned, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (uuid, week_id, day, meal_type, kind, recipe_id, free_text, servings, note, pinned, sort_order, batch_source_uuid)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       newUuid(),
       input.weekId,
@@ -111,6 +114,7 @@ export async function createSlot(input: SlotInput, db?: SQLiteDatabase): Promise
       input.note,
       input.pinned ? 1 : 0,
       input.sortOrder,
+      input.batchSourceUuid ?? null,
     ]
   );
   return result.lastInsertRowId;
@@ -125,7 +129,7 @@ export async function updateSlot(
   await database.runAsync(
     `UPDATE slots
         SET day = ?, meal_type = ?, kind = ?, recipe_id = ?, free_text = ?, servings = ?,
-            note = ?, pinned = ?, sort_order = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+             note = ?, pinned = ?, sort_order = ?, batch_source_uuid = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE id = ?`,
     [
       input.day,
@@ -137,6 +141,7 @@ export async function updateSlot(
       input.note,
       input.pinned ? 1 : 0,
       input.sortOrder,
+      input.batchSourceUuid ?? null,
       id,
     ]
   );
@@ -178,8 +183,8 @@ export async function deleteSlot(id: number, db?: SQLiteDatabase): Promise<void>
   await database.runAsync(
     `UPDATE slots
         SET deleted = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-      WHERE id = ?`,
-    [id]
+      WHERE id = ? OR batch_source_uuid = (SELECT uuid FROM slots WHERE id = ?)`,
+    [id, id]
   );
 }
 

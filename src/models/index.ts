@@ -331,6 +331,7 @@ export interface WeekDayBudget {
 }
 
 export interface Slot {
+  batchSourceUuid: string | null;
   id: number;
   uuid: string | null;
   weekId: number;

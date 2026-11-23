@@ -1,0 +1,37 @@
+Feature to support a "cook for multiple days" option. Select, for example, to cook 2 portions of a food on Tuesday, then eat the second portion of it on Wednesday, so no need to cook.
+The AI doesnt work. A prompt is entered into the chat field, then a user clicks on "save recipe / send" (so also on the overview page), and it waits forever, and nothing happens
+Seedworks login is not available. The cloud page in settings only says "seedworks cloud isnt configured for this build". It HAS TO BE from this point on. The full feature of logging in, sync up to the cloud, this then available on other devices, sync between devices, username pulling, usage reporting, everything (like in Coconut) has to be available. The schema used should be banana, in the seedworks supabase db.
+A shared life feature: two separate user accounts (seedworks accounts!) can log in, and in settings configure (find other user based on seedworks email) that they are sharing their lives. This is meant mostly for households, people living in one household. In such a case, everyone has their own seedworks account, but their data syncs between eachother. Specifically, they all see the same thing in Banana. They have the same households/pantries, they have the same recipes, and they have the same meal plans. If one user adds another recipe, the other immediately sees it, and can edit it. It essentially should work as if these two people would have one account. For the technical implementation: there should be a "virtual user" created. So when one of these people, in a shared househodld, log in to their banana account, they actually get served the data of another account. And if they leave the household, they get access to their account again, as in if they log out, they wont be redirected to this virtual account anymore.
+Feature to automatically update Banana. If the "check for updates" is enabled in settings, then there should be a prompt shown on app launch if there is a new update available. The user can close it once, ignore the version forever, or click "update now". This then starts the download of the new APK, which then gives a notification, with a progress bar of how the update is going. Once the apk is fully downloaded, banana updates itself, the same way as Coconut.
+Fix on new user screen / loading screen, a weird half moon is used instead of banana logo
+When dictating in one of the AI prompt windows (week changes / add recipe / read leaflet), all android users get this error: "Install selected language from android settings for speech recognition". Speech recognition does work for them in other apps, so it very likely is a Banana issue.
+If user enetered text in the textboxd gets too big, it grows so much it cannot be submitted. So should be a fixes size box, and oast that it scrolls with a side bar
+
+Implementation progress (requirements above are unchanged):
+- 1: Implemented explicit multi-day cooking, linked leftover reservations, portion scaling, and migration 11. Targeted verification: 4 suites / 12 tests passed; TypeScript, lint and web export passed at this checkpoint. Device acceptance remains with the user.
+- 2: Added a hard 90-second deadline covering stalled requests and response bodies, and explicit non-streaming requests. AI verification: 5 suites / 33 tests passed using mocked transports. The original real-device failure still needs user acceptance testing.
+- 3: Bundled the existing public SeedWorks client configuration and enabled foreground periodic sync. Sync verification: 3 suites / 15 tests passed; TypeScript passed. Authentication, username and usage paths retain existing regression coverage. No production data was changed.
+- 4: Implemented consent-based household RPCs and RLS migration in ../Supabase, isolated local dataset snapshots, settings UI, debounced local-write sync and realtime subscriptions. PostgreSQL 17 migration/access-control assertions passed in a disposable Docker database; household UI, context isolation and sync verification passed. A concurrent deployment subsequently applied migration 20261118120000: remote migration history and pg_proc inspection confirmed the household RPCs are present. This session did not push production changes.
+- 5: Implemented opt-in startup checks, one-time dismissal, persistent version ignoring, official-APK validation, Android DownloadManager progress notifications and OS-consented installation. Update policy, transport and consent UI tests passed; the native module compiled in the release APK.
+- 6: Replaced the crescent with assets/banana-logo.jpg for the shared welcome/loading logo. Both logo regression tests passed.
+- 7: Added bounded installed-language discovery and regional-language selection for recipe, plan and leaflet dictation, retaining on-device-only recognition. Speech/leaflet tests passed. Devices genuinely lacking an offline recognizer/model still require OS support; no online speech fallback was introduced.
+- 8: Added fixed-height scrolling multiline fields with persistent scrollbars for AI prompts and manual multiline editors. Regression test passed; emulator inspection with a long plan prompt confirmed that Send remains visible and text scrolls. The test prompt was cancelled without sending it.
+
+Final verification:
+- npm test -- --runInBand: 51 suites, 274 tests passed; no console.error output in the final run.
+- npm run typecheck: passed.
+- npm run lint: passed.
+- npx expo export --platform web: passed.
+- NODE_ENV=production ./gradlew :app:assembleRelease --no-daemon --console=plain: passed, including BananaUpdate native compilation.
+- Latest APK installed with adb install -r and launched successfully on the existing Pixel emulator; scoped React Native/Android runtime error logs were empty. No emulator/app data was erased.
+- Documented light/dark contrast pairs: zero failures in automated verification.
+- SQLite migrations 11–13 appended; prior migrations unchanged.
+- No npm dependency added. Only the existing public SeedWorks connection identifier is bundled; no secret credential added.
+- Release notes written to release-notes/0.3.0.md. App version, Git commits/tags and release publishing remain untouched by this session.
+
+User acceptance handoff (explicitly approved by the user):
+- Real-device AI recipe creation and plan edits, including slow/offline-provider errors.
+- Two SeedWorks accounts/devices: login, username, usage, cross-device edits, invite/accept, shared edits, leave/sign-out and restoration of personal data.
+- Dictation in the installed Android speech languages, including leaflet recording/transcription.
+- Update prompt/download notification/installation with an actual newer, correctly signed APK.
+- Implementation and automated verification are complete; these real-device acceptance checks are pending, not claimed as passed.

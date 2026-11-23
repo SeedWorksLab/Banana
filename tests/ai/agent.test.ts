@@ -86,6 +86,18 @@ describe('AI agent', () => {
   it('builds the same user message helper the agent uses', () => {
     expect(planEditUserMessage(context, 'hello')).toContain('User request:\nhello');
   });
+  it('includes nullable and linked batch identities in the plan context', () => {
+    const source = {
+      uuid: 'batch-source', day: 'tue', mealType: 'dinner', kind: 'recipe',
+      recipeId: 1, recipeName: 'Soup', freeText: null, servings: 2,
+      pinned: true, cookedAt: null, batchSourceUuid: null,
+    };
+    const message = planEditUserMessage({ ...context, slots: [
+      source, { ...source, uuid: 'reserved', day: 'wed', kind: 'leftovers', servings: 1, batchSourceUuid: source.uuid },
+    ] }, 'Keep the batch');
+    expect(message).toContain('"batchSourceUuid":null');
+    expect(message).toContain('"batchSourceUuid":"batch-source"');
+  });
 
   it('extracts recipes from dictation without any network access', async () => {
     const { provider, calls } = fakeProvider(

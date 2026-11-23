@@ -174,3 +174,8 @@ export async function updateSettings(
   }
   return next;
 }
+
+export async function clearLocalUsername(db?: SQLiteDatabase): Promise<void> {
+  const database = db ?? (await getDatabase());
+  await database.runAsync("DELETE FROM settings WHERE key = 'username'");
+}

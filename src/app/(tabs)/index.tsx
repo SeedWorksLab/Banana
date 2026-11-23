@@ -11,10 +11,11 @@ import { StatCard } from '../../components/stat-card';
 import { ScreenToast } from '../../components/screen-toast';
 import { AppDialog } from '../../components/app-dialog';
 import { NumberField } from '../../components/number-field';
+import { ScrollableTextInput } from '../../components/scrollable-text-input';
 import { OptionField } from '../../components/option-field';
 import { useAppTheme } from '../../theme';
 import { useAppData, type WeekPlan } from '../../data/DataProvider';
-import { MEAL_MODES, MEAL_TYPES, type DayMode, type MealMode, type MealType, type WeekDay } from '../../models';
+import { MEAL_MODES, MEAL_TYPES, WEEK_DAYS, type DayMode, type MealMode, type MealType, type WeekDay } from '../../models';
 import { computeRatings } from '../../services/recipe-service';
 import { recommendRecipes } from '../../services/discovery-service';
 import {
@@ -64,6 +65,7 @@ export default function PlanScreen() {
     planWeekMeals,
     setMealBudget,
     setDayWish,
+    cookForDays,
     loadWeekPlan,
     regenerateShoppingList,
   } = useAppData();
@@ -82,6 +84,7 @@ export default function PlanScreen() {
   const [editEnabled, setEditEnabled] = useState(true);
   const [editMinutes, setEditMinutes] = useState<number | null>(30);
   const [editServings, setEditServings] = useState<number | null>(2);
+  const [editBatchDays, setEditBatchDays] = useState(1);
   const [editWishRecipeId, setEditWishRecipeId] = useState<number | null>(null);
   const [editWishText, setEditWishText] = useState('');
   const [dictating, setDictating] = useState(false);
@@ -311,12 +314,18 @@ export default function PlanScreen() {
     const budget = plan?.budgets.find((entry) => entry.day === day.day);
     const meal = mealSettingsForDay(budget ?? day).find((entry) => entry.mealType === mealType);
     const wish = plan?.slots.find((slot) => slot.day === day.day && slot.mealType === mealType && slot.pinned);
+    if (wish?.batchSourceUuid) {
+      const source = plan?.slots.find((slot) => slot.uuid === wish.batchSourceUuid);
+      setToast(`Edit the cooking day${source ? ` (${weekDayLabel(source.day)})` : ''} to change this batch.`);
+      return;
+    }
     setEditingDay(day.day);
     setEditMealType(mealType);
     setEditEnabled(meal?.enabled ?? mealType !== 'snack');
     setEditMode(meal?.mode ?? 'cook');
     setEditMinutes(meal?.cookMinutes ?? day.cookMinutes);
     setEditServings(day.servings);
+    setEditBatchDays(wish?.uuid ? 1 + (plan?.slots.filter((slot) => slot.batchSourceUuid === wish.uuid).length ?? 0) : 1);
     setEditHomeId(homeByDay.get(day.day) ?? activeHomeId);
     setEditWishRecipeId(wish?.recipeId ?? null);
     setEditWishText(wish?.freeText ?? '');
@@ -330,15 +339,25 @@ export default function PlanScreen() {
       setToast('Use a non-negative time and at least one serving');
       return;
     }
+    if (editBatchDays > 1 && (editWishRecipeId === null || editMode !== 'cook')) {
+      setToast('Choose a recipe and Cook mode to cook for multiple days.');
+      return;
+    }
     dictationRef.current?.abort();
     dictationRef.current = null;
     setDictating(false);
     setBusy(true);
     try {
-      await setMealBudget(plan.week.id, editingDay, {
-        mealType: editMealType, mode: editMode, cookMinutes: editMinutes, enabled: editEnabled,
-      }, editServings, editHomeId);
-      if (editEnabled) await setDayWish(
+      if (editEnabled && editBatchDays > 1) {
+        if (editWishRecipeId === null || editMode !== 'cook') {
+          throw new Error('Choose a recipe and Cook mode to cook for multiple days.');
+        }
+        await cookForDays(plan.week.id, editingDay, editMealType, editWishRecipeId, editBatchDays, editServings, editMinutes, editHomeId);
+      } else {
+        await setMealBudget(plan.week.id, editingDay, {
+          mealType: editMealType, mode: editMode, cookMinutes: editMinutes, enabled: editEnabled,
+        }, editServings, editHomeId);
+        if (editEnabled) await setDayWish(
         plan.week.id,
         editingDay,
         editWishRecipeId,
@@ -346,14 +365,15 @@ export default function PlanScreen() {
         editServings,
         editMealType
       );
+      }
       await load();
+      setEditingDay(null);
     } catch (caught) {
       setToast(caught instanceof Error ? caught.message : 'Could not save the meal');
     } finally {
       setBusy(false);
-      setEditingDay(null);
     }
-  }, [plan, editingDay, editMode, editMinutes, editServings, editHomeId, editWishRecipeId, editWishText, setMealBudget, setDayWish, load, editMealType, editEnabled]);
+  }, [plan, editingDay, editMode, editMinutes, editServings, editHomeId, editWishRecipeId, editWishText, setMealBudget, setDayWish, cookForDays, editBatchDays, load, editMealType, editEnabled]);
 
   const closeDayEditor = useCallback(() => {
     dictationAttempt.current += 1;
@@ -392,7 +412,7 @@ export default function PlanScreen() {
     startingDictationRef.current = true;
     const attempt = ++dictationAttempt.current;
     try {
-      const granted = await requestSpeechRecognitionPermission();
+      const granted = await requestSpeechRecognitionPermission(settings.language);
       if (attempt !== dictationAttempt.current) return;
       if (!granted) {
         setToast('Microphone permission is needed to dictate');
@@ -455,7 +475,7 @@ export default function PlanScreen() {
     startingDictationRef.current = true;
     const attempt = ++dictationAttempt.current;
     try {
-      const granted = await requestSpeechRecognitionPermission();
+      const granted = await requestSpeechRecognitionPermission(settings.language);
       if (attempt !== dictationAttempt.current) return;
       if (!granted) {
         setToast('Microphone permission is needed to talk');
@@ -661,7 +681,9 @@ export default function PlanScreen() {
                     const slot = slots.find((entry) => entry.mealType === meal.mealType);
                     const label = slot?.kind === 'recipe' && slot.recipeId !== null
                       ? recipeNameById.get(slot.recipeId) ?? 'Recipe'
-                      : slot?.kind === 'leftovers' ? 'Leftovers' : slot?.freeText ?? 'Not planned';
+                      : slot?.kind === 'leftovers'
+                        ? `Leftovers${slot.recipeId ? ` · ${recipeNameById.get(slot.recipeId) ?? 'Recipe'}` : ''}`
+                        : slot?.freeText ?? 'Not planned';
                     return (
                       <View key={meal.mealType} style={{ flexDirection: 'row', alignItems: 'center', gap: theme.spacing[2] }}>
                         <View style={{ flex: 1, paddingVertical: theme.spacing[1] }}>
@@ -673,10 +695,12 @@ export default function PlanScreen() {
                             accessibilityRole="button" accessibilityLabel={`Open ${label}`}
                             style={{ minHeight: theme.spacing[7], justifyContent: 'center' }}>
                             <Text variant="bodyMedium" style={{ color: theme.colors.primary }}>
-                              {label}{slot.pinned ? ' · pinned' : ''}
+                               {label}{slot.pinned ? ' · pinned' : ''}
                             </Text>
-                          </Pressable>
-                        ) : <Text variant="bodyMedium">{label}{slot?.pinned ? ' · pinned' : ''}</Text>}
+                           </Pressable>
+                         ) : <Text variant="bodyMedium">{label}{slot?.pinned ? ' · pinned' : ''}</Text>}
+                         {slot?.uuid && plan?.slots.some((entry) => entry.batchSourceUuid === slot.uuid)
+                           ? <Text variant="bodySmall">Cook {slot.servings} portions, including leftovers</Text> : null}
                         </View>
                         <IconButton icon="pencil-outline" size={18} onPress={() => openDayEditor(day, meal.mealType)}
                           accessibilityRole="button" accessibilityLabel={`Edit ${weekDayLabel(day.day)} ${MEAL_TYPE_LABELS[meal.mealType]}`}
@@ -710,7 +734,7 @@ export default function PlanScreen() {
           <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
             Say what changed. Banana changes only what it has to.
           </Text>
-          <TextInput
+          <ScrollableTextInput
             label="Message"
             mode="outlined"
             multiline
@@ -807,6 +831,18 @@ export default function PlanScreen() {
             emptyLabel="Main home"
             onChange={setEditHomeId}
           />
+          {editMode === 'cook' ? <OptionField
+            label="Cook for multiple days"
+            value={editBatchDays}
+            nullable={false}
+            options={Array.from({ length: editingDay ? 7 - WEEK_DAYS.indexOf(editingDay) : 1 },
+              (_, index) => ({ value: index + 1, label: index === 0 ? 'This meal only' : `${index + 1} days (same meal)` }))}
+            onChange={(value) => setEditBatchDays(value ?? 1)}
+          /> : null}
+          {editBatchDays > 1 ? <Text variant="bodySmall">
+            Choose a recipe below. Cook {(editServings ?? 0) * editBatchDays} portions on this day;
+            the following meals use the leftovers. Existing meals on those days will be replaced.
+          </Text> : null}
           <View style={{ marginTop: theme.spacing[2] }}>
             <OptionField
               label="Food wish"

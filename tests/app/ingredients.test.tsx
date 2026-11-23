@@ -18,7 +18,7 @@ jest.mock('../../src/data/DataProvider', () => ({
 }));
 
 it('corrects a known ingredient in place, preserving its identity and other details', async () => {
-  await render(<PaperProvider theme={lightTheme}><IngredientsScreen /></PaperProvider>);
+  await render(<PaperProvider theme={{ ...lightTheme, animation: { scale: 0 } }}><IngredientsScreen /></PaperProvider>);
   await fireEvent.press(screen.getByRole('button', { name: 'Edit Buter' }));
   await fireEvent.changeText(screen.getByLabelText('Ingredient name'), 'Butter');
   await fireEvent.press(screen.getByRole('button', { name: 'Save ingredient' }));

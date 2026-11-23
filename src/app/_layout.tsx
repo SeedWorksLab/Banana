@@ -8,6 +8,7 @@ import { BananaThemeProvider, useAppTheme } from '../theme';
 import { buildNavigationTheme } from '../theme/navigation';
 import { DataProvider, useAppData } from '../data/DataProvider';
 import { ShareIntentImport } from '../components/share-intent-import';
+import { UpdateNotifier } from '../components/update-notifier';
 
 function ThemedContent() {
   const theme = useAppTheme();
@@ -42,6 +43,7 @@ function ThemedContent() {
           <Stack.Screen name="about" options={{ title: t('screen.about') }} />
         </Stack>
         <ShareIntentImport />
+        <UpdateNotifier />
       </PaperProvider>
     </ThemeProvider>
   );

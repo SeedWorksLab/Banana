@@ -32,9 +32,15 @@ export function createOpenAiCompatibleProvider(config: AiProviderConfig): AiProv
         throw new AiProviderError('The AI provider is not configured');
       }
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new AiProviderError('The AI provider timed out. Please try again.'));
+          controller.abort();
+        }, REQUEST_TIMEOUT_MS);
+      });
       try {
-        const response = await fetch(chatCompletionsUrl(config.baseUrl), {
+        const response = await Promise.race([deadline, fetch(chatCompletionsUrl(config.baseUrl), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -43,16 +49,15 @@ export function createOpenAiCompatibleProvider(config: AiProviderConfig): AiProv
           body: JSON.stringify({
             model: config.model,
             messages: request.messages,
-            temperature: request.temperature ?? 0.2,
+             temperature: request.temperature ?? 0.2,
+             stream: false,
           }),
           signal: controller.signal,
-        });
+        })]);
         if (!response.ok) {
-          const body = await response.text().catch(() => '');
-          const detail = body.trim() === '' ? '' : `: ${body.slice(0, 200)}`;
-          throw new AiProviderError(`The AI provider returned ${response.status}${detail}`);
+          throw new AiProviderError(`The AI provider returned ${response.status}. Check your provider settings.`);
         }
-        const payload = (await response.json()) as CompletionResponse;
+        const payload = (await Promise.race([deadline, response.json()])) as CompletionResponse;
         const text = payload.choices?.[0]?.message?.content ?? '';
         if (text.trim() === '') {
           throw new AiProviderError('The AI provider returned an empty response');

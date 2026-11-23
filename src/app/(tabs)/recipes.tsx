@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Button, Card, Chip, FAB, Searchbar, Text, TextInput } from 'react-native-paper';
+import { Button, Card, Chip, FAB, Searchbar, Text } from 'react-native-paper';
+import { ScrollableTextInput } from '../../components/scrollable-text-input';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 
 import { ScreenFade } from '../../components/screen-fade';
@@ -67,7 +68,7 @@ export default function RecipesScreen() {
     startingRef.current = true;
     const attempt = ++dictationAttempt.current;
     try {
-      const granted = await requestSpeechRecognitionPermission();
+      const granted = await requestSpeechRecognitionPermission(settings.language);
       if (attempt !== dictationAttempt.current) return;
       if (!granted) {
         setToast('Microphone permission is needed to dictate');
@@ -224,13 +225,13 @@ export default function RecipesScreen() {
             Say the ingredients and steps in your own words. Banana saves them without changing
             what you said.
           </Text>
-          <TextInput
+          <ScrollableTextInput
             label="Recipe"
             mode="outlined"
             multiline
             value={transcript}
             onChangeText={setTranscript}
-            style={{ marginTop: theme.spacing[3], minHeight: 120 }}
+            style={{ marginTop: theme.spacing[3] }}
           />
           <Pressable
             onPress={() => void (dictating ? stopDictation() : startDictation())}

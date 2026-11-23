@@ -5,6 +5,7 @@ import { Button, Chip, Switch, Text, TextInput } from 'react-native-paper';
 
 import { KeyboardAwareScrollView } from '../../components/keyboard-aware-scroll-view';
 import { NumberField } from '../../components/number-field';
+import { ScrollableTextInput } from '../../components/scrollable-text-input';
 import { OptionField } from '../../components/option-field';
 import { ScreenFade } from '../../components/screen-fade';
 import { useAppData } from '../../data/DataProvider';
@@ -139,7 +140,7 @@ export default function RecipeEditorScreen() {
     <ScreenFade>
       <KeyboardAwareScrollView contentContainerStyle={styles.container}>
         <TextInput label="Name" value={name} onChangeText={setName} mode="outlined" />
-        <TextInput
+        <ScrollableTextInput
           label="Description"
           value={description}
           onChangeText={setDescription}
@@ -240,7 +241,7 @@ export default function RecipeEditorScreen() {
           Steps
         </Text>
         {steps.map((step, index) => (
-          <TextInput
+          <ScrollableTextInput
             key={index}
             label={`Step ${index + 1}`}
             value={step}

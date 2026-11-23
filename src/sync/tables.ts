@@ -72,7 +72,7 @@ export const SYNC_TABLES: readonly SyncTable[] = [
   {
     name: 'slots',
     columns: ['week_id', 'day', 'meal_type', 'kind', 'recipe_id', 'free_text', 'servings',
-      'note', 'pinned', 'cooked_at', 'rating', 'sort_order', 'deleted'],
+      'note', 'pinned', 'cooked_at', 'rating', 'sort_order', 'deleted', 'batch_source_uuid'],
     references: { week_id: 'weeks', recipe_id: 'recipes' },
     booleans: ['pinned', 'deleted'],
   },

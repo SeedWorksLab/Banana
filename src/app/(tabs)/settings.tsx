@@ -12,6 +12,7 @@ import { CURRENCIES, THEME_MODES } from '../../models';
 import { requestNotificationPermission } from '../../services/notifications';
 import { LANGUAGES, useI18n, type Language } from '../../i18n';
 import { CURRENCY_LABELS } from '../../utils/currency';
+import { UpdateSettings } from '../../components/update-settings';
 
 const CURRENCY_OPTIONS = CURRENCIES.map((currency) => ({
   value: currency,
@@ -87,6 +88,7 @@ export default function SettingsScreen() {
         <Card>
           <Card.Content>
             <Text variant="titleMedium">{t('settings.reminders')}</Text>
+            <UpdateSettings />
             <View style={styles.switchRow}>
               <View style={styles.flex}>
                 <Text variant="bodyLarge">{t('settings.planUpdates')}</Text>

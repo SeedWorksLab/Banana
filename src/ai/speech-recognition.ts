@@ -24,6 +24,17 @@ type SpeechRecognitionModule = typeof import('expo-speech-recognition')['ExpoSpe
 const STOP_TIMEOUT_MS = 8000;
 let cachedModule: SpeechRecognitionModule | null | undefined;
 let activeSession: LiveTranscriptionHandle | null = null;
+const preparedLocales = new Map<string, string>();
+
+export function selectSpeechLocale(language: string | null, installed: readonly string[]): string {
+  const requested = ({ en: 'en-US', de: 'de-DE', hu: 'hu-HU' } as Record<string, string>)[language ?? 'en']
+    ?? language ?? 'en-US';
+  const normalize = (value: string) => value.replace(/_/g, '-').toLowerCase();
+  const exact = installed.find((value) => normalize(value) === normalize(requested));
+  const sameLanguage = installed.find((value) => normalize(value).split('-')[0] === normalize(requested).split('-')[0]);
+  // The UI language is not necessarily the device's installed dictation language.
+  return (exact ?? sameLanguage ?? installed[0] ?? requested).replace(/_/g, '-');
+}
 
 function speechModule(): SpeechRecognitionModule | null {
   if (cachedModule === undefined) {
@@ -41,10 +52,21 @@ export function supportsRecordedTranscription(): boolean {
   return isSpeechRecognitionAvailable() && Boolean(speechModule()?.supportsRecording());
 }
 
-export async function requestSpeechRecognitionPermission(): Promise<boolean> {
+export async function requestSpeechRecognitionPermission(language: string | null = null): Promise<boolean> {
   const module = speechModule();
   if (module === null) return false;
-  return (await module.requestPermissionsAsync()).granted;
+  if (!(await module.requestPermissionsAsync()).granted) return false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const supported = await Promise.race([
+      module.getSupportedLocales({}),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Locale query timed out')), 4000); }),
+    ]);
+    preparedLocales.set(language ?? '', selectSpeechLocale(language, supported.installedLocales));
+  } catch {
+    preparedLocales.set(language ?? '', selectSpeechLocale(language, []));
+  } finally { clearTimeout(timer); }
+  return true;
 }
 
 export function startLiveTranscription(options: LiveTranscriptionOptions): LiveTranscriptionHandle {
@@ -122,15 +144,15 @@ export function startLiveTranscription(options: LiveTranscriptionOptions): LiveT
       reportedError = true;
       finish();
       options.onError(
-        event.error === 'language-not-supported'
-          ? 'Install the selected language for offline speech recognition in Android settings.'
+         event.error === 'language-not-supported'
+          ? 'The Android on-device recognizer could not use this speech language. Other apps may use online dictation. Check the offline languages in Android speech settings.'
           : event.message || 'Speech recognition failed. Check Android speech recognition settings.'
       );
     }),
   );
   try {
     module.start({
-      lang: ({ en: 'en-US', de: 'de-DE', hu: 'hu-HU' } as Record<string, string>)[options.language ?? 'en'] ?? options.language ?? 'en-US',
+      lang: preparedLocales.get(options.language ?? '') ?? selectSpeechLocale(options.language, []),
       interimResults: true,
       continuous: true,
       requiresOnDeviceRecognition: true,

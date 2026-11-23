@@ -4,6 +4,8 @@ import { getSyncMeta, setSyncMeta } from '../database/syncMeta';
 import { getSyncState, updateSyncState } from '../database/syncState';
 import { SYNC_SETTINGS_KEYS, SYNC_TABLES, type SyncTable } from './tables';
 import { getClient, getSignedInUser } from './supabase';
+import { resolveDataIdentity } from './households';
+import { switchDataContext } from '../database/data-contexts';
 import { createSupabaseTransport, type RemoteRow, type RemoteTombstone, type SyncTransport } from './transport';
 
 interface LocalRow extends Record<string, unknown> {
@@ -323,10 +325,15 @@ async function usage(db: SQLiteDatabase): Promise<{ records: number; bytes: numb
 
 async function runSync(options: SyncOptions): Promise<SyncResult | null> {
   const db = options.db ?? (await getDatabase());
-  const state = await getSyncState(db);
+  let state = await getSyncState(db);
   if (!state.enabled) return null;
-  const userId = options.userId ?? (await getSignedInUser())?.id;
-  if (!userId) throw new Error('Sign in to SeedWorks to sync.');
+  const accountId = options.userId ?? (await getSignedInUser())?.id;
+  if (!accountId) throw new Error('Sign in to SeedWorks to sync.');
+  const userId = options.userId ?? await resolveDataIdentity();
+  if (!options.userId) {
+    await switchDataContext(userId, accountId, db);
+    state = await getSyncState(db);
+  }
   const identity = await getSyncMeta(IDENTITY_KEY, db);
   if (identity && identity !== userId) {
     throw new Error('This local data is already linked to a different SeedWorks account.');
@@ -417,7 +424,7 @@ async function runSync(options: SyncOptions): Promise<SyncResult | null> {
       deleted += 1;
     }
     await syncSettings(db, transport, userId);
-    await syncUsername(db, transport, userId);
+    await syncUsername(db, transport, accountId);
     const { records, bytes } = await usage(db);
     await transport.reportUsage(records, bytes);
     await updateSyncState({

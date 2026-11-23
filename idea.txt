@@ -1,5 +1,16 @@
 # Banana — AI-Assisted Weekly Meal Planner
 
+### Approved release-workflow amendment
+
+Versioned plans in `release-plans/<version>` and verified notes in
+`release-notes/<version>.md` replace new entries in the legacy release-plan and
+hardcoded What's New files. Opening What's New explicitly refreshes public
+notes from the official GitHub releases, with a persistent offline cache and an
+installed-version cap. This approved network use is independent of automatic
+update settings; it sends no personal data and never refreshes at startup.
+See `AGENTS.md` and `release-plans/README.md` for the ordered implementation and
+separate, user-invoked `--github --agent-notes` release procedure.
+
 Banana is a private, local-first Android app that plans your next week of
 meals, tells you what to buy, and spends your food budget where the deals are.
 Its defining interaction is a **week**: you set how much time you have on each
@@ -17,6 +28,21 @@ Read `AGENTS.md` for how to build it. Read `theme.md` for how it looks. This
 document defines what it is.
 
 ---
+
+### Approved 0.3.0 scope amendment
+
+`release-plans/0.3.0` extends the original local-only specification below.
+SeedWorks authentication, profiles/usernames, usage reporting and optional
+cross-device sync are approved, using the Supabase `banana` schema and Coconut
+as a read-only reference. Shared-life households use a shared data identity
+without merging or deleting personal datasets; joining requires consent and
+leaving restores the personal context. User-enabled release checks and APK
+downloads are approved, respecting Android installation consent.
+These additional network boundaries supersede the original no-account/no-cloud/
+two-network restrictions throughout this document. SQLite remains the offline
+source of truth; credentials stay out of logs, exports and synced domain data.
+For 0.3.0 the user performs real-device acceptance testing after automated/static
+verification, with outstanding device checks explicitly reported.
 
 ## 1. Purpose
 

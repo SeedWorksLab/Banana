@@ -10,6 +10,7 @@ import {
 
 function slot(partial: Partial<Slot>): Slot {
   return {
+    batchSourceUuid: partial.batchSourceUuid ?? null,
     id: partial.id ?? 1,
     uuid: partial.uuid ?? null,
     weekId: partial.weekId ?? 1,

@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { SectionList, View } from 'react-native';
-import { Button, Card, Chip, Text, TextInput } from 'react-native-paper';
+import { Button, Card, Chip, Text } from 'react-native-paper';
+import { ScrollableTextInput } from '../../components/scrollable-text-input';
 import { ScreenFade } from '../../components/screen-fade';
 import { KeyboardAwareScrollView } from '../../components/keyboard-aware-scroll-view';
 import { EmptyState } from '../../components/empty-state';
@@ -204,7 +205,7 @@ export default function DealsScreen() {
           <Text variant="bodyMedium">
             Start recording, then open your leaflet in another app. Return here and stop to transcribe on this device and send the text to your AI.
           </Text>
-          <TextInput label="Leaflet" mode="outlined" multiline value={leafletText} onChangeText={setLeafletText}
+          <ScrollableTextInput label="Leaflet" mode="outlined" multiline value={leafletText} onChangeText={setLeafletText}
             editable={!leafletBusy && !recording.busy} accessibilityLabel="Leaflet text"
             style={{ marginTop: theme.spacing[3], maxHeight: theme.spacing[10] * 3 }} />
           <Button mode="contained-tonal" icon={recording.recording ? 'stop-circle-outline' : 'microphone'}

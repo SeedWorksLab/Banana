@@ -275,4 +275,32 @@ ALTER TABLE week_day_budgets ADD COLUMN meal_settings TEXT;
 UPDATE settings SET value = '0' WHERE key = 'dinner_only';
 `,
   },
+  {
+    id: 11,
+    description: 'Link reserved leftover meals to their batch cooking slot',
+    sql: '',
+    apply: async (db) => {
+      await ensureColumn(db, 'slots', 'batch_source_uuid', 'TEXT');
+    },
+  },
+  {
+    id: 12,
+    description: 'Preserve isolated personal and shared-household local datasets',
+    sql: `CREATE TABLE IF NOT EXISTS data_contexts (
+      identity_id TEXT PRIMARY KEY NOT NULL,
+      payload TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );`,
+  },
+  {
+    id: 13,
+    description: 'Invalidate uneaten reservations when a batch cooking meal changes',
+    sql: `CREATE TRIGGER IF NOT EXISTS trg_batch_source_changed
+      AFTER UPDATE OF recipe_id, kind, servings ON slots
+      WHEN OLD.recipe_id IS NOT NEW.recipe_id OR OLD.kind <> NEW.kind OR OLD.servings <> NEW.servings
+      BEGIN
+        UPDATE slots SET deleted = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE batch_source_uuid = NEW.uuid AND cooked_at IS NULL;
+      END;`,
+  },
 ];

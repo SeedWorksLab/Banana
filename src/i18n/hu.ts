@@ -1,6 +1,10 @@
 import type { TranslationKey } from './en';
 
 export const hu: Record<TranslationKey, string> = {
+  'whatsNew.loading': 'Kiadási megjegyzések betöltése',
+  'whatsNew.offline': 'Nem sikerült frissíteni. A mentett vagy beépített megjegyzések láthatók.',
+  'whatsNew.empty': 'Ehhez a verzióhoz még nincsenek közzétett kiadási megjegyzések.',
+  'whatsNew.refresh': 'Kiadási megjegyzések frissítése',
   'nav.plan': 'Terv',
   'nav.recipes': 'Receptek',
   'nav.shopping': 'Bevásárlás',

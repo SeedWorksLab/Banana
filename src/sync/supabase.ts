@@ -18,7 +18,7 @@ export function getClient(): BananaClient {
       autoRefreshToken: true,
       detectSessionInUrl: false,
     },
-    realtime: { params: { eventsPerSecond: 0 } },
+    realtime: { params: { eventsPerSecond: 10 } },
   });
   client = created;
   return created;

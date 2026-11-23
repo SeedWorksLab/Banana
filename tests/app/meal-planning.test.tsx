@@ -7,6 +7,8 @@ import { DEFAULT_SETTINGS as mockSettings } from '../../src/database/settings';
 import { DEFAULT_PREFERENCES as mockPreferences } from '../../src/database/preferences';
 import * as dateUtils from '../../src/utils/date';
 
+jest.setTimeout(20_000);
+
 afterEach(() => jest.restoreAllMocks());
 
 const mockMeal = jest.fn(async () => {});

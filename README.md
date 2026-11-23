@@ -1,8 +1,8 @@
 # Banana
 
 <p align="center">
-  <a href="https://seedworkslab.github.io/apps/banana/">
-    <img src="https://seedworkslab.github.io/assets/readme/download-banana.svg" alt="Download Banana" width="340">
+  <a href="https://seedworkslab.de/apps/banana/">
+    <img src="https://seedworkslab.de/assets/readme/download-banana.svg" alt="Download Banana" width="340">
   </a>
 </p>
 
@@ -13,14 +13,14 @@
 <p align="center">
   A private, offline-first Android meal planner. Set how much time you have each day and what you fancy,<br>
   get a week that fits both, and turn it into one organised shopping list aware of the current deals at Lidl, Hofer and Spar.<br>
-  Everything stays on your device — the only network calls go to the AI provider you configure and the public store offers pages.
+   Offline-first, with optional SeedWorks sync and shared households, your configured AI provider, public offers and release updates.
 </p>
 
 ---
 
 ## About
 
-Banana is a personal meal planner, not a social network or a cloud service. You
+Banana is a personal meal planner, not a social network. You
 build a small library of the meals you actually cook, tell it how much time you
 have on each weekday and anything you specifically want to eat, and Banana
 proposes a plan that fits both. It then aggregates everything you need to buy
@@ -29,14 +29,21 @@ three Austrian supermarkets.
 
 All data lives in a local SQLite database on the device — the single source of
 truth. The app works fully offline. Manual entry is always a complete equal of
-the AI path. There is no backend, no account, no advertising, and no analytics.
+the AI path. A SeedWorks account is optional. There is no advertising or analytics.
 
-**There are exactly two outbound network uses.** One is the AI provider you
+**Network boundaries are explicit.** One is the AI provider you
 configure yourself, called only when you invoke an AI feature. The other is the
 **deal scraper**, which reads the public offers page of an enabled retailer once
 per refresh and caches the result in SQLite. Your base URL, API key and model
 name are stored only on your device, are never included in a backup, and are
 never sent anywhere else. No personal data is ever sent to a retailer.
+Optional SeedWorks sync sends opted-in application data to the shared SeedWorks
+Supabase project, in the `banana` schema. Shared-life households require an
+accepted invitation and use a separate shared dataset; leaving restores your
+personal data. SeedWorks also provides your username and aggregate usage reporting.
+User-enabled update checks read official GitHub releases, and Update now downloads
+an APK through Android's notification-visible download manager. Android requires
+installation consent. Opening What's New reads official published release notes.
 
 ## Key features
 
@@ -70,14 +77,14 @@ never sent anywhere else. No personal data is ever sent to a retailer.
 
 ## Data & privacy
 
-- Single-user, local-first: the database never leaves your device unless you
-  export it.
+- Local-first: domain data leaves the device only for user-invoked AI, explicitly
+  enabled SeedWorks sync, or a backup you export.
 - Money is stored as integer cents; physical quantities (grams, millilitres,
   counts) as REAL; durations as integer minutes.
-- The only external services are the AI provider you configure yourself and the
-  public offers pages of the retailers you enable. The key is stored on-device
-  only, excluded from backups, and never logged.
-- No analytics, advertising, telemetry or third parties.
+- External services are limited to configured AI, enabled retailers, SeedWorks,
+  and official public releases. AI credentials and SeedWorks sessions are excluded
+  from backups and synced domain data.
+- No advertising, tracking analytics, or crash-reporting services.
 
 ## Tech stack
 

@@ -1,6 +1,10 @@
 import type { TranslationKey } from './en';
 
 export const de: Record<TranslationKey, string> = {
+  'whatsNew.loading': 'Versionshinweise werden geladen',
+  'whatsNew.offline': 'Aktualisierung fehlgeschlagen. Gespeicherte oder mitgelieferte Hinweise werden angezeigt.',
+  'whatsNew.empty': 'Für diese Version sind noch keine Versionshinweise veröffentlicht.',
+  'whatsNew.refresh': 'Versionshinweise aktualisieren',
   'nav.plan': 'Plan',
   'nav.recipes': 'Rezepte',
   'nav.shopping': 'Einkauf',

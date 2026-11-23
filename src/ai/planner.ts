@@ -29,6 +29,7 @@ export interface PlanEditContext {
     meals?: MealSetting[];
   }[];
   slots: {
+    uuid: string | null;
     day: string;
     mealType: string;
     kind: string;
@@ -38,6 +39,7 @@ export interface PlanEditContext {
     servings: number;
     pinned: boolean;
     cookedAt: string | null;
+    batchSourceUuid: string | null;
   }[];
   recipes: {
     id: number;

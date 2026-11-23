@@ -25,12 +25,23 @@ you need a pattern; **never modify anything under the Coconut or PassionFruit
 directories.**
 
 Local SQLite is the single source of truth. The app works fully offline. There
-are exactly two permitted outbound network uses, both described in §10:
+are four permitted outbound network uses:
 
 1. the AI provider the user configured, and only when the user invokes an AI
    feature;
 2. the **deal scraper**, which reads the public offers page of an enabled
    retailer once per refresh.
+3. SeedWorks authentication, profile/username retrieval, usage reporting and
+   optional cross-device sync in the Supabase `banana` schema, including
+   consent-based shared-household membership and data sharing.
+4. User-enabled release checks and APK downloads, following Coconut's
+   implementation and respecting Android installation consent.
+
+Items 3–4 are user-approved for 0.3.0. Keep network transports separate from pure
+services. Personal datasets remain isolated from shared household datasets;
+leaving a household restores the personal context without deleting either.
+SeedWorks' public project URL and publishable client identifier may be bundled,
+as in Coconut; these are not secret credentials. Never bundle a service-role key.
 
 Tech stack (mandatory, do not deviate without explicit user approval):
 
@@ -49,8 +60,8 @@ Tech stack (mandatory, do not deviate without explicit user approval):
 Forbidden additions:
 
 - Redux / MobX / Zustand or any state-management framework
-- Any backend or cloud service. There is no Banana server, ever.
-- Any network use other than the AI provider and the deal scraper (§10)
+- Any backend or cloud service except the approved SeedWorks integration
+- Any network use except AI, deal scraping, SeedWorks and release updates
 - Ads, analytics, telemetry, or crash-reporting SDKs
 - `react-native-vector-icons` (use `@expo/vector-icons`, which ships with Expo)
 - An HTML-parsing library for the scraper (use `fetch` and string parsing)
@@ -64,6 +75,24 @@ stored only in the local `ai_state` singleton.
 ---
 
 ## 2. Report and Plan
+
+### Versioned release plans
+
+When the prompt names `release-plans/<version>`, that file is the task specification.
+Read it in full, then implement its tasks strictly in written order. A task may
+span multiple lines. Test and verify each task before starting the next; stop
+and report ambiguity, failures or unavailable required device checks. Record
+progress and exact verification results in the plan without rewriting requirements.
+After every task and the Definition of Done pass, write user-facing
+`release-notes/<version>.md` describing only completed, verified changes.
+Use paragraphs, `###` headings and `-` bullets; no outer Release Notes heading
+or HTML markers. Do not add new hardcoded What's New entries.
+Do not bump versions, run release scripts, commit, tag, push or publish unless
+separately asked. See `release-plans/README.md` for the shared contract.
+
+Opening What's New explicitly requests the official GitHub release notes,
+independent of automatic-update settings. This is an approved public-data network
+use; never send personal data or refresh notes at startup.
 
 When starting work:
 
@@ -130,9 +159,10 @@ restart the app process. None of these erase data.
 If a task seems to require a fresh emulator, STOP and ask the user first. Never
 assume permission, and never treat a wipe as an acceptable debugging step.
 
-**Real-device rule for the network layers.** The AI provider and the scraper
-must be exercised on a **real device** before a task that touches them is
-considered done; the emulator is not evidence that a network call works.
+**Real-device rule for the network layers.** For release 0.3.0 the user performs
+real-device acceptance testing after implementation and automated/static checks.
+Report this handoff explicitly; mocked tests and emulator checks are not evidence
+that real-device network calls work.
 
 ---
 
@@ -415,8 +445,9 @@ A task is done only when ALL of the following hold:
 7. No API key or credential is present in the diff.
 8. If the change affects the appearance, the contrast verification in
    `theme.md` §8 still reports zero failures.
-9. If the change affects the AI provider or the scraper, it was exercised on a
-   **real device**, not only the emulator, and the network rules in §10 hold.
+9. Network changes respect the approved boundaries. For 0.3.0 real-device
+   acceptance testing is handed off to the user after automated/static checks
+   and explicitly reported as pending.
 10. If the change affects the schema, a **new** numbered migration was added and
     no existing migration was edited.
 11. If the change touches `src/services/`, `src/ai/` or `src/deals/`, the

@@ -4,6 +4,7 @@ const mockModule = {
   isRecognitionAvailable: jest.fn(() => true),
   supportsOnDeviceRecognition: jest.fn(() => true),
   supportsRecording: jest.fn(() => true),
+  getSupportedLocales: jest.fn(async () => ({ locales: ['en-US'], installedLocales: ['en-US'] })),
   requestPermissionsAsync: jest.fn(async () => ({ granted: true })),
   start: jest.fn(),
   stop: jest.fn(),
@@ -24,7 +25,7 @@ jest.mock('expo-modules-core', () => {
   };
 });
 
-import { startLiveTranscription } from '../../src/ai/speech-recognition';
+import { startLiveTranscription, selectSpeechLocale, requestSpeechRecognitionPermission } from '../../src/ai/speech-recognition';
 
 function emit(name: string, event: unknown = null) {
   [...(mockListeners.get(name) ?? [])].forEach((listener) => listener(event));
@@ -118,4 +119,21 @@ it('cleans up synchronous startup failures', () => {
   expect(() => startLiveTranscription({ language: 'en', contextualStrings: [], onError: jest.fn() })).toThrow('Microphone busy');
   const next = startLiveTranscription({ language: 'en', contextualStrings: [], onError: jest.fn() });
   next.abort();
+});
+
+it('selects installed regional variants instead of requiring the hardcoded locale', () => {
+  expect(selectSpeechLocale('en', ['en-GB', 'de-DE'])).toBe('en-GB');
+  expect(selectSpeechLocale('de', ['de_AT'])).toBe('de-AT');
+  expect(selectSpeechLocale('hu', ['en-GB'])).toBe('en-GB');
+  expect(selectSpeechLocale(null, [])).toBe('en-US');
+});
+
+it('queries the on-device recognizer and uses its installed language without enabling cloud speech', async () => {
+  mockModule.getSupportedLocales.mockResolvedValueOnce({ locales: ['en-GB'], installedLocales: ['en-GB'] });
+  expect(await requestSpeechRecognitionPermission('en')).toBe(true);
+  const handle = startLiveTranscription({ language: 'en', contextualStrings: [], onError: jest.fn() });
+  expect(mockModule.start).toHaveBeenLastCalledWith(expect.objectContaining({
+    lang: 'en-GB', requiresOnDeviceRecognition: true,
+  }));
+  handle.abort();
 });

@@ -8,6 +8,7 @@ import { useAppData } from '../data/DataProvider';
 import { getWelcomeSeen, setWelcomeSeen } from '../database/onboarding';
 import { useI18n } from '../i18n';
 import { useAppTheme } from '../theme';
+import { HouseholdSettings } from '../components/household-settings';
 
 export default function SeedWorksScreen() {
   const router = useRouter();
@@ -124,6 +125,7 @@ export default function SeedWorksScreen() {
             {message ? <Text accessibilityRole="alert">{message}</Text> : null}
           </Card.Content>
         </Card>
+        {seedWorksEmail ? <HouseholdSettings /> : null}
       </KeyboardAwareScrollView>
     </ScreenFade>
   );
