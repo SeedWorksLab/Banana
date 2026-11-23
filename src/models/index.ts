@@ -157,7 +157,6 @@ export interface Settings {
   defaultWeekendMinutes: number;
   dinnerOnly: boolean;
   planStartDay: WeekDay;
-  notificationsEnabled: boolean;
   shoppingReminderHour: number;
   planReminderDay: WeekDay;
   tutorialSeen: boolean;

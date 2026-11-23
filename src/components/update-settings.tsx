@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Switch, Text } from 'react-native-paper';
-import { View } from 'react-native';
+import { List, Switch, Text } from 'react-native-paper';
 import { getUpdatePreferences, saveUpdatePreferences } from '../database/update-preferences';
 import { useAppTheme } from '../theme';
 
@@ -21,15 +20,14 @@ export function UpdateSettings() {
     catch { setError('Could not save update preferences.'); }
   }
   return <>
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.spacing[3] }}>
-      <View style={{ flex: 1 }}>
-        <Text variant="bodyLarge">Check for updates</Text>
-        <Text variant="bodySmall">Check official GitHub releases when Banana starts.</Text>
-      </View>
-      <Switch value={enabled} disabled={!ready} onValueChange={(value) => void toggle(value)}
+    <List.Item title="Check for updates" description="Check official GitHub releases when Banana starts."
+      descriptionNumberOfLines={3} testID="settings-check-updates"
+      style={{ borderRadius: theme.radii.pill, margin: theme.spacing[3], backgroundColor: theme.colors.surfaceVariant }}
+      left={(props) => <List.Icon {...props} icon="update" />}
+      right={() => <Switch value={enabled} disabled={!ready} onValueChange={(value) => void toggle(value)}
         accessibilityRole="switch" accessibilityLabel="Check for updates"
-        accessibilityState={{ checked: enabled, disabled: !ready }} />
-    </View>
+        accessibilityState={{ checked: enabled, disabled: !ready }} />}
+    />
     {error ? <Text accessibilityRole="alert">{error}</Text> : null}
   </>;
 }

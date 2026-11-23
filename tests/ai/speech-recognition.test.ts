@@ -25,7 +25,7 @@ jest.mock('expo-modules-core', () => {
   };
 });
 
-import { startLiveTranscription, selectSpeechLocale, requestSpeechRecognitionPermission } from '../../src/ai/speech-recognition';
+import { startLiveTranscription, selectSpeechLocale, requestSpeechRecognitionPermission } from '../../src/ai/android-speech-recognition';
 
 function emit(name: string, event: unknown = null) {
   [...(mockListeners.get(name) ?? [])].forEach((listener) => listener(event));
@@ -124,7 +124,7 @@ it('cleans up synchronous startup failures', () => {
 it('selects installed regional variants instead of requiring the hardcoded locale', () => {
   expect(selectSpeechLocale('en', ['en-GB', 'de-DE'])).toBe('en-GB');
   expect(selectSpeechLocale('de', ['de_AT'])).toBe('de-AT');
-  expect(selectSpeechLocale('hu', ['en-GB'])).toBe('en-GB');
+  expect(selectSpeechLocale('hu', ['en-GB'])).toBe('hu-HU');
   expect(selectSpeechLocale(null, [])).toBe('en-US');
 });
 

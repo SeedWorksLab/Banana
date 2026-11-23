@@ -13,6 +13,8 @@ it('opens the menu from the whole labelled field, without pressing the arrow', a
   );
   const field = screen.getByRole('button', { name: 'Unit: Grams' });
   expect(field.props.accessibilityState.expanded).toBe(false);
+  expect(screen.getAllByRole('button', { includeHiddenElements: true })).toHaveLength(1);
+  expect(screen.queryByTestId('text-input-outlined')).toBeNull();
   await fireEvent.press(field);
   expect(screen.getByTestId('option-Unit').props.accessibilityState.expanded).toBe(true);
 });

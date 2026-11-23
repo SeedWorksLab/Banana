@@ -1,4 +1,4 @@
-import { EATING_OUT_TAG, MEAL_TYPES, type MealType } from '../models';
+import { EATING_OUT_TAG, MEAL_TYPES, type MealType, type SlotKind } from '../models';
 
 export function recipeMealTypes(recipe: { category: MealType; tags: readonly string[] }): MealType[] {
   const tags = recipe.tags.map((tag) => tag.trim().toLowerCase());
@@ -24,6 +24,7 @@ export interface RecipeSummary {
 export interface RatingEntry {
   recipeId: number;
   rating: number | null;
+  kind?: SlotKind;
 }
 
 export interface RecipeStats {

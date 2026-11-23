@@ -16,7 +16,7 @@ import { OptionField } from '../../components/option-field';
 import { useAppTheme } from '../../theme';
 import { useAppData, type WeekPlan } from '../../data/DataProvider';
 import { MEAL_MODES, MEAL_TYPES, WEEK_DAYS, type DayMode, type MealMode, type MealType, type WeekDay } from '../../models';
-import { computeRatings } from '../../services/recipe-service';
+import { filterRecipesForPreferences } from '../../services/preference-service';
 import { recommendRecipes } from '../../services/discovery-service';
 import {
   isSpeechRecognitionAvailable,
@@ -34,11 +34,13 @@ import {
 import { buildShoppingList } from '../../services/shopping-list-service';
 import { bestDealForIngredient, isDealActive, type IngredientDeal } from '../../services/deal-service';
 import { allowsRecipeForMeal, mealSettingsForDay } from '../../services/meal-settings-service';
-import { buildDayPlans, weekProgress, weekRange } from '../../services/week-service';
+import { buildDayPlans, isPastPlanDay, weekProgress, weekRange } from '../../services/week-service';
 import { formatCents } from '../../utils/currency';
 import { addDays, formatDate, todayDate, weekStart } from '../../utils/date';
 import { DAY_MODE_LABELS, MEAL_TYPE_LABELS, weekDayLabel } from '../../utils/labels';
 import { expiringIngredients, soonLabel } from '../../services/expiry-service';
+import { batchMealDetails, leftoverSources } from '../../services/batch-cooking-service';
+import { BatchMealSummary } from '../../components/batch-meal-summary';
 
 const MEAL_MODE_OPTIONS = MEAL_MODES.map((mode) => ({
   value: mode,
@@ -66,14 +68,17 @@ export default function PlanScreen() {
     setMealBudget,
     setDayWish,
     cookForDays,
+    setMealLeftovers,
     loadWeekPlan,
     regenerateShoppingList,
   } = useAppData();
 
   const [weekOffset, setWeekOffset] = useState(0);
+  const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
+  const today = todayDate();
   const weekStartDate = useMemo(
-    () => addDays(weekStart(todayDate()), weekOffset * 7),
-    [weekOffset]
+    () => addDays(weekStart(today), weekOffset * 7),
+    [today, weekOffset]
   );
   const [plan, setPlan] = useState<WeekPlan | null>(null);
   const [busy, setBusy] = useState(false);
@@ -85,15 +90,18 @@ export default function PlanScreen() {
   const [editMinutes, setEditMinutes] = useState<number | null>(30);
   const [editServings, setEditServings] = useState<number | null>(2);
   const [editBatchDays, setEditBatchDays] = useState(1);
+  const [editLeftoverSourceUuid, setEditLeftoverSourceUuid] = useState<string | null>(null);
   const [editWishRecipeId, setEditWishRecipeId] = useState<number | null>(null);
   const [editWishText, setEditWishText] = useState('');
   const [dictating, setDictating] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const dictationRef = useRef<LiveTranscriptionHandle | null>(null);
   const [editHomeId, setEditHomeId] = useState<number | null>(null);
   const [agentOpen, setAgentOpen] = useState(false);
   const [agentText, setAgentText] = useState('');
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentDictating, setAgentDictating] = useState(false);
+  const [agentTranscribing, setAgentTranscribing] = useState(false);
   const agentDictationRef = useRef<LiveTranscriptionHandle | null>(null);
   const startingDictationRef = useRef(false);
   const dictationAttempt = useRef(0);
@@ -144,27 +152,25 @@ export default function PlanScreen() {
     );
   }, [deals, dealMatches]);
   const plannerRecipes = useMemo(
-    () =>
-      buildPlannerRecipes(summaries, ingredientNames, preferences.defaultServings, {
-        factsByRecipe: ingredientFacts,
-        stockedIngredientIds,
-        onOfferIngredientIds,
-      }),
+    () => {
+      const eligibleIds = new Set(recipes.filter((recipe) => recipe.active && !recipe.deleted && !recipe.isWish).map((recipe) => recipe.id));
+      return filterRecipesForPreferences(buildPlannerRecipes(
+        summaries.filter((summary) => eligibleIds.has(summary.id)), ingredientNames, preferences.defaultServings, {
+          factsByRecipe: ingredientFacts, stockedIngredientIds, onOfferIngredientIds,
+        },
+      ), preferences);
+    },
     [
       summaries,
       ingredientNames,
       ingredientFacts,
       stockedIngredientIds,
       onOfferIngredientIds,
-      preferences.defaultServings,
+      preferences,
+      recipes,
     ]
   );
   const discoverySuggestions = useMemo(() => {
-    const stats = computeRatings(recipeHistory);
-    const cookCounts = new Map<number, number>();
-    for (const entry of recipeHistory) {
-      cookCounts.set(entry.recipeId, (cookCounts.get(entry.recipeId) ?? 0) + 1);
-    }
     const plannedRecipeIds = (plan?.slots ?? [])
       .map((slot) => slot.recipeId)
       .filter((id): id is number => id !== null);
@@ -177,16 +183,18 @@ export default function PlanScreen() {
         ingredientNames: recipe.ingredientNames,
         onOfferIngredientIds: recipe.onOfferIngredientIds,
         isFavorite: recipe.isFavorite,
-        timesCooked: cookCounts.get(recipe.id) ?? 0,
-        averageRating: stats.get(recipe.id)?.averageRating ?? null,
       })),
       {
         dislikedNames: preferences.dislikes,
         skipRecipeIds: plannedRecipeIds,
         limit: 4,
+        history: recipeHistory,
+        recentUses: plan?.recentRecipeUses ?? [],
+        referenceDate: weekStartDate,
+        rotationKey: weekStartDate,
       }
     );
-  }, [plannerRecipes, recipeHistory, plan, preferences.dislikes]);
+  }, [plannerRecipes, recipeHistory, plan, preferences.dislikes, weekStartDate]);
 
   const dayPlans = useMemo(() => {
     if (!plan) {
@@ -228,6 +236,16 @@ export default function PlanScreen() {
     [homes]
   );
   const activeHomeId = defaultHome?.id ?? homes[0]?.id ?? null;
+  const editingSlot = plan?.slots.find((slot) => slot.day === editingDay && slot.mealType === editMealType);
+  const editingBatch = useMemo(() => editingSlot ? batchMealDetails(editingSlot, plan?.slots ?? []) : null, [editingSlot, plan]);
+  const editingCookingSource = editMode === 'cook' && !editingSlot?.batchSourceUuid && Boolean(editingBatch?.leftovers.length);
+  const leftoverSourceOptions = useMemo(() => editingDay && plan
+    ? leftoverSources(plan.slots, plan.budgets, {
+      day: editingDay, mealType: editMealType, homeId: editHomeId,
+    }, activeHomeId).map((slot) => ({
+      value: slot.uuid!,
+      label: `${weekDayLabel(slot.day)} ${MEAL_TYPE_LABELS[slot.mealType].toLowerCase()} · ${recipeNameById.get(slot.recipeId!) ?? 'Recipe'}`,
+    })) : [], [editingDay, editMealType, editHomeId, plan, activeHomeId, recipeNameById]);
   const useSoon = useMemo(
     () =>
       expiringIngredients(
@@ -314,18 +332,21 @@ export default function PlanScreen() {
     const budget = plan?.budgets.find((entry) => entry.day === day.day);
     const meal = mealSettingsForDay(budget ?? day).find((entry) => entry.mealType === mealType);
     const wish = plan?.slots.find((slot) => slot.day === day.day && slot.mealType === mealType && slot.pinned);
-    if (wish?.batchSourceUuid) {
-      const source = plan?.slots.find((slot) => slot.uuid === wish.batchSourceUuid);
-      setToast(`Edit the cooking day${source ? ` (${weekDayLabel(source.day)})` : ''} to change this batch.`);
+    if (wish?.cookedAt || (wish?.batchSourceUuid && plan?.slots.find((slot) => slot.uuid === wish.batchSourceUuid)?.cookedAt)) {
+      setToast('This batch is already cooked or eaten. Its reservations cannot be changed.');
       return;
+    }
+    if (wish?.batchSourceUuid && !plan?.slots.some((slot) => slot.uuid === wish.batchSourceUuid)) {
+      setToast('The original cooking meal is missing. Choose a new source for these leftovers.');
     }
     setEditingDay(day.day);
     setEditMealType(mealType);
     setEditEnabled(meal?.enabled ?? mealType !== 'snack');
-    setEditMode(meal?.mode ?? 'cook');
+    setEditMode(wish?.batchSourceUuid ? 'leftovers' : meal?.mode ?? 'cook');
     setEditMinutes(meal?.cookMinutes ?? day.cookMinutes);
-    setEditServings(day.servings);
-    setEditBatchDays(wish?.uuid ? 1 + (plan?.slots.filter((slot) => slot.batchSourceUuid === wish.uuid).length ?? 0) : 1);
+    setEditServings(wish ? batchMealDetails(wish, plan?.slots ?? []).mealServings : day.servings);
+    setEditBatchDays(1);
+    setEditLeftoverSourceUuid(wish?.batchSourceUuid ?? null);
     setEditHomeId(homeByDay.get(day.day) ?? activeHomeId);
     setEditWishRecipeId(wish?.recipeId ?? null);
     setEditWishText(wish?.freeText ?? '');
@@ -348,7 +369,10 @@ export default function PlanScreen() {
     setDictating(false);
     setBusy(true);
     try {
-      if (editEnabled && editBatchDays > 1) {
+      if (editEnabled && editMode === 'leftovers') {
+        if (!editLeftoverSourceUuid) throw new Error('Choose which earlier meal these leftovers come from.');
+        await setMealLeftovers(plan.week.id, editingDay, editMealType, editLeftoverSourceUuid, editServings, editHomeId);
+      } else if (editEnabled && editBatchDays > 1) {
         if (editWishRecipeId === null || editMode !== 'cook') {
           throw new Error('Choose a recipe and Cook mode to cook for multiple days.');
         }
@@ -373,7 +397,7 @@ export default function PlanScreen() {
     } finally {
       setBusy(false);
     }
-  }, [plan, editingDay, editMode, editMinutes, editServings, editHomeId, editWishRecipeId, editWishText, setMealBudget, setDayWish, cookForDays, editBatchDays, load, editMealType, editEnabled]);
+  }, [plan, editingDay, editMode, editMinutes, editServings, editHomeId, editWishRecipeId, editWishText, setMealBudget, setDayWish, cookForDays, setMealLeftovers, editLeftoverSourceUuid, editBatchDays, load, editMealType, editEnabled]);
 
   const closeDayEditor = useCallback(() => {
     dictationAttempt.current += 1;
@@ -385,18 +409,21 @@ export default function PlanScreen() {
 
   const stopDictation = useCallback(async (apply: boolean) => {
     const handle = dictationRef.current;
-    dictationRef.current = null;
     if (!handle) {
       setDictating(false);
       return;
     }
     if (!apply) {
+      dictationRef.current = null;
       handle.abort();
       setDictating(false);
       return;
     }
     await handle.stop();
-    setDictating(false);
+    if (dictationRef.current === handle) {
+      dictationRef.current = null;
+      setDictating(false);
+    }
   }, []);
 
   const handleDictate = useCallback(async () => {
@@ -421,6 +448,7 @@ export default function PlanScreen() {
       dictationRef.current = startLiveTranscription({
         language: settings.language,
         contextualStrings: recipes.map((recipe) => recipe.name),
+        onProcessing: setTranscribing,
         onTranscript: (text) => {
           setEditWishRecipeId(null);
           setEditWishText([editWishText.trim(), text].filter(Boolean).join(' '));
@@ -484,6 +512,7 @@ export default function PlanScreen() {
       agentDictationRef.current = startLiveTranscription({
         language: settings.language,
         contextualStrings: recipes.map((recipe) => recipe.name),
+        onProcessing: setAgentTranscribing,
         onTranscript: setAgentText,
         onError: (message) => {
           setToast(message);
@@ -506,17 +535,19 @@ export default function PlanScreen() {
     async (apply: boolean) => {
       if (!apply) dictationAttempt.current += 1;
       const handle = agentDictationRef.current;
-      agentDictationRef.current = null;
       if (!handle) {
         setAgentDictating(false);
         return;
       }
       if (!apply) {
+        agentDictationRef.current = null;
         handle.abort();
         setAgentDictating(false);
         return;
       }
       const result = await handle.stop();
+      if (agentDictationRef.current !== handle) return;
+      agentDictationRef.current = null;
       setAgentDictating(false);
       const text = result?.text?.trim();
       if (text) {
@@ -645,7 +676,8 @@ export default function PlanScreen() {
           dayPlans.map((day) => {
             const slots = plan.slots.filter((slot) => slot.day === day.day);
             const meals = mealSettingsForDay(plan.budgets.find((budget) => budget.day === day.day) ?? day);
-            const isToday = day.date === todayDate();
+            const isToday = day.date === today;
+            const expanded = expandedDays[day.date] ?? !isPastPlanDay(day.date, today);
             const homeName = homeNameById.get(homeByDay.get(day.day) ?? activeHomeId);
             return (
               <Card key={day.day} testID={`day-card-${day.day}`}
@@ -655,19 +687,33 @@ export default function PlanScreen() {
                 } : null]}>
                 <Card.Content>
                   <View style={styles.dayHeader}>
-                    <View style={{ flex: 1, gap: theme.spacing[1] }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.spacing[2], flexWrap: 'wrap' }}>
-                        <Text variant="titleSmall">{weekDayLabel(day.day)}</Text>
-                        {isToday ? <Text variant="labelMedium" accessibilityLabel="Today"
-                          style={{ color: theme.colors.onPrimaryContainer, backgroundColor: theme.colors.primaryContainer,
-                            borderRadius: theme.radii.pill, paddingHorizontal: theme.spacing[2], paddingVertical: theme.spacing[1] }}>
-                          Today
-                        </Text> : null}
+                    <Pressable
+                      onPress={() => setExpandedDays((previous) => ({
+                        ...previous, [day.date]: !(previous[day.date] ?? !isPastPlanDay(day.date, today)),
+                      }))}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${weekDayLabel(day.day)}${isToday ? ', today' : ''}`}
+                      accessibilityState={{ expanded }}
+                      aria-expanded={expanded}
+                      testID={`day-toggle-${day.day}`}
+                      style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: theme.spacing[2] }}
+                    >
+                      <View style={{ flex: 1, gap: theme.spacing[1] }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.spacing[2], flexWrap: 'wrap' }}>
+                          <Text variant="titleSmall">{weekDayLabel(day.day)}</Text>
+                          {isToday ? <Text variant="labelMedium" accessibilityLabel="Today"
+                            style={{ color: theme.colors.onPrimaryContainer, backgroundColor: theme.colors.primaryContainer,
+                              borderRadius: theme.radii.pill, paddingHorizontal: theme.spacing[2], paddingVertical: theme.spacing[1] }}>
+                            Today
+                          </Text> : null}
+                        </View>
+                        <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
+                          {day.servings} people{homeName ? ` · ${homeName}` : ''}
+                        </Text>
                       </View>
-                      <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-                        {day.servings} people{homeName ? ` · ${homeName}` : ''}
-                      </Text>
-                    </View>
+                      <MaterialCommunityIcons name={expanded ? 'chevron-up' : 'chevron-down'}
+                        size={theme.spacing[6]} color={theme.colors.onSurfaceVariant} accessible={false} />
+                    </Pressable>
                       <IconButton
                         icon="tune"
                         size={18}
@@ -676,6 +722,7 @@ export default function PlanScreen() {
                         accessibilityLabel={`Edit ${weekDayLabel(day.day)}`}
                       />
                   </View>
+                  {expanded ? <View testID={`day-content-${day.day}`}>
                   <Divider style={{ marginVertical: theme.spacing[1] }} />
                   {meals.filter((meal) => meal.enabled || slots.some((slot) => slot.mealType === meal.mealType)).map((meal) => {
                     const slot = slots.find((entry) => entry.mealType === meal.mealType);
@@ -688,7 +735,8 @@ export default function PlanScreen() {
                       <View key={meal.mealType} style={{ flexDirection: 'row', alignItems: 'center', gap: theme.spacing[2] }}>
                         <View style={{ flex: 1, paddingVertical: theme.spacing[1] }}>
                           <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant }}>
-                            {MEAL_TYPE_LABELS[meal.mealType]} · {meal.mode === 'eating_out' ? 'Eating out' : `${meal.cookMinutes} min · ${DAY_MODE_LABELS[meal.mode]}`}
+                            {MEAL_TYPE_LABELS[meal.mealType]} · {slot?.kind === 'leftovers' ? 'Leftovers · No cooking'
+                              : meal.mode === 'eating_out' ? 'Eating out' : `${meal.cookMinutes} min · ${DAY_MODE_LABELS[meal.mode]}`}
                           </Text>
                         {slot?.recipeId ? (
                           <Pressable onPress={() => router.push(`/recipe/${slot.recipeId}`)}
@@ -699,8 +747,7 @@ export default function PlanScreen() {
                             </Text>
                            </Pressable>
                          ) : <Text variant="bodyMedium">{label}{slot?.pinned ? ' · pinned' : ''}</Text>}
-                         {slot?.uuid && plan?.slots.some((entry) => entry.batchSourceUuid === slot.uuid)
-                           ? <Text variant="bodySmall">Cook {slot.servings} portions, including leftovers</Text> : null}
+                          {slot ? <BatchMealSummary slot={slot} slots={plan?.slots ?? []} /> : null}
                         </View>
                         <IconButton icon="pencil-outline" size={18} onPress={() => openDayEditor(day, meal.mealType)}
                           accessibilityRole="button" accessibilityLabel={`Edit ${weekDayLabel(day.day)} ${MEAL_TYPE_LABELS[meal.mealType]}`}
@@ -712,6 +759,7 @@ export default function PlanScreen() {
                     <Button compact icon="plus" onPress={() => openDayEditor(day, 'snack')}
                       accessibilityRole="button" accessibilityLabel={`Add snack on ${weekDayLabel(day.day)}`}>Add snack</Button>
                   ) : null}
+                  </View> : null}
                 </Card.Content>
               </Card>
             );
@@ -744,10 +792,10 @@ export default function PlanScreen() {
           />
           <Pressable
             onPress={() => void (agentDictating ? stopAgentDictation(true) : startAgentDictation())}
-            disabled={agentBusy}
+            disabled={agentBusy || agentTranscribing}
             accessibilityRole="button"
-            accessibilityLabel={agentDictating ? 'Stop and send to Banana' : 'Start talking to Banana'}
-            accessibilityState={{ busy: agentDictating, disabled: agentBusy }}
+            accessibilityLabel={agentTranscribing ? 'Transcribing instruction' : agentDictating ? 'Stop and send to Banana' : 'Start talking to Banana'}
+            accessibilityState={{ busy: agentDictating, disabled: agentBusy || agentTranscribing }}
             style={({ pressed }) => [
               styles.talkButton,
               {
@@ -766,7 +814,7 @@ export default function PlanScreen() {
               color={theme.colors.onSurfaceVariant}
             />
             <Text variant="labelLarge">
-              {agentDictating ? 'Stop and send' : 'Start dictation'}
+              {agentTranscribing ? 'Transcribing…' : agentDictating ? 'Stop and send' : 'Start dictation'}
             </Text>
           </Pressable>
         </AppDialog.Content>
@@ -809,17 +857,34 @@ export default function PlanScreen() {
               if (value !== null) {
                 setEditMode(value);
                 setEditWishRecipeId(null);
+                setEditBatchDays(1);
+                setEditLeftoverSourceUuid(null);
+                if (value === 'leftovers') setEditMinutes(0);
               }
             }}
           />
-          <NumberField
+          {editMode === 'leftovers' ? (
+            <View style={{ gap: theme.spacing[2] }}>
+              <OptionField label="Leftovers from" value={editLeftoverSourceUuid}
+                options={leftoverSourceOptions} emptyLabel="Choose an earlier cooking meal"
+                onChange={setEditLeftoverSourceUuid} />
+              <Text variant="bodyMedium">
+                {leftoverSourceOptions.length
+                  ? 'Reserve portions from that meal. Banana adjusts how much to cook there and counts ingredients only once.'
+                  : 'Plan an earlier home-cooked recipe in this week and the same home first. Already cooked batches cannot be resized.'}
+              </Text>
+              {editingSlot?.batchSourceUuid ? <Text variant="bodySmall">
+                To remove this reservation and cook something else, change Meal mode to Cook.
+              </Text> : null}
+            </View>
+          ) : <NumberField
             label="Cooking minutes for this meal"
             value={editMinutes}
             integer
             onChange={setEditMinutes}
-          />
+          />}
           <NumberField
-            label="People eating that day"
+            label="Portions to eat at this meal"
             value={editServings}
             integer
             onChange={setEditServings}
@@ -831,19 +896,28 @@ export default function PlanScreen() {
             emptyLabel="Main home"
             onChange={setEditHomeId}
           />
-          {editMode === 'cook' ? <OptionField
-            label="Cook for multiple days"
+          {editingCookingSource && editingSlot ? (
+            <>
+              <BatchMealSummary slot={editingSlot} slots={plan?.slots ?? []} />
+              <Text variant="bodyMedium">
+                This meal supplies the leftovers shown above. Edit each leftover meal to change or remove its reservation.
+                Changing the portions eaten here also updates the cooking total.
+              </Text>
+            </>
+          ) : null}
+          {editMode === 'cook' && !editingCookingSource ? <OptionField
+            label="Reserve consecutive leftover meals"
             value={editBatchDays}
             nullable={false}
             options={Array.from({ length: editingDay ? 7 - WEEK_DAYS.indexOf(editingDay) : 1 },
-              (_, index) => ({ value: index + 1, label: index === 0 ? 'This meal only' : `${index + 1} days (same meal)` }))}
+              (_, index) => ({ value: index + 1, label: index === 0 ? 'No additional days' : `${index + 1} days (same meal)` }))}
             onChange={(value) => setEditBatchDays(value ?? 1)}
           /> : null}
           {editBatchDays > 1 ? <Text variant="bodySmall">
             Choose a recipe below. Cook {(editServings ?? 0) * editBatchDays} portions on this day;
             the following meals use the leftovers. Existing meals on those days will be replaced.
           </Text> : null}
-          <View style={{ marginTop: theme.spacing[2] }}>
+          {editMode !== 'leftovers' && !editingCookingSource ? <View style={{ marginTop: theme.spacing[2] }}>
             <OptionField
               label="Food wish"
               value={editWishRecipeId}
@@ -880,15 +954,17 @@ export default function PlanScreen() {
                 mode={dictating ? 'contained' : 'outlined'}
                 icon={dictating ? 'stop' : 'microphone'}
                 onPress={handleDictate}
+                disabled={transcribing}
+                accessibilityState={{ busy: transcribing, disabled: transcribing }}
                 accessibilityLabel={dictating ? 'Stop dictating the wish' : 'Dictate the wish'}
               >
-                {dictating ? 'Stop' : 'Dictate'}
+                {transcribing ? 'Transcribing…' : dictating ? 'Stop' : 'Dictate'}
               </Button>
               <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-                {dictating ? 'Listening...' : 'Speak a wish instead of typing'}
+                {transcribing ? 'Transcribing on your phone…' : dictating ? 'Listening...' : 'Speak a wish instead of typing'}
               </Text>
             </View>
-          </View>
+          </View> : null}
           </KeyboardAwareScrollView>
         </AppDialog.Content>
         <AppDialog.Actions>

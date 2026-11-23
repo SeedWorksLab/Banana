@@ -7,7 +7,6 @@ function configureHandler(): void {
   if (handlerConfigured) {
     return;
   }
-  handlerConfigured = true;
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
       shouldShowBanner: true,
@@ -16,6 +15,7 @@ function configureHandler(): void {
       shouldSetBadge: false,
     }),
   });
+  handlerConfigured = true;
 }
 
 export async function requestNotificationPermission(): Promise<boolean> {
@@ -23,29 +23,34 @@ export async function requestNotificationPermission(): Promise<boolean> {
   if (current.granted) {
     return true;
   }
+  if (!current.canAskAgain) return false;
   const requested = await Notifications.requestPermissionsAsync();
   return requested.granted;
 }
 
 export async function notifyPlanUpdated(body: string): Promise<boolean> {
-  configureHandler();
-  const granted = await Notifications.getPermissionsAsync();
-  if (!granted.granted) {
+  try {
+    configureHandler();
+    if (!(await requestNotificationPermission())) {
+      return false;
+    }
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync('plan-updates', {
+        name: 'Plan updates',
+        importance: Notifications.AndroidImportance.DEFAULT,
+      });
+    }
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: 'Banana updated your plan',
+        body,
+        sound: false,
+      },
+      trigger: null,
+    });
+    return true;
+  } catch {
+    // Notification permission or delivery must never fail a completed plan update.
     return false;
   }
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('plan-updates', {
-      name: 'Plan updates',
-      importance: Notifications.AndroidImportance.DEFAULT,
-    });
-  }
-  await Notifications.scheduleNotificationAsync({
-    content: {
-      title: 'Banana updated your plan',
-      body,
-      sound: false,
-    },
-    trigger: null,
-  });
-  return true;
 }

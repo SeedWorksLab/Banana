@@ -205,6 +205,17 @@ A slot is marked **cooked** when the meal is made. Marking a slot cooked can
 roll the surplus into a designated `leftovers` slot the next day, which is how
 "cook once, eat twice" is recorded rather than merely hoped for.
 
+Leftover meals can explicitly select an earlier, not-yet-cooked recipe meal in
+the same week and home, including another meal type or a non-consecutive day.
+The cooking meal records all portions to prepare; each linked leftover meal
+records the portions to eat. Changing or removing a reservation adjusts the
+cooking total atomically, and the shopping list counts ingredients only at the
+cooking meal. Cooked/eaten batches cannot be resized or reassigned. The plan
+visibly distinguishes cooking from leftovers, names the source day and meal,
+and lists the portions reserved for each later meal. The existing consecutive-
+days shortcut remains available when initially creating a batch; established
+reservations are edited individually rather than silently rebuilt.
+
 After cooking, a meal is **rated**: `liked` / `disliked` / `unsure`, plus an
 optional 1–5 overall rating. Ratings are the learning signal. A disliked
 recipe is deprecated for that household; a liked one is promoted.
@@ -428,12 +439,28 @@ ceiling, budget); the recipe catalogue; the pantry; and the current deals.
 
 ### 7.3 The deterministic planner
 
-`src/services/planning-service.ts` is a pure, deterministic function. Given the
-same week and the same catalogue it returns the same plan, so it is fully
-testable. It is greedy and explainable: for each day, from a scored shortlist,
-choose the meal that best fits the time budget and the remaining week, while
-maximising shared ingredients and deal coverage. It is the baseline that the AI
-may improve and the fallback that always exists.
+`src/services/planning-service.ts` is pure and deterministic. The same week,
+catalogue, preferences, pins and recent-plan history produce the same result.
+Pinned/cooked meals are reserved first, followed by the meals with the fewest
+suitable choices, so a flexible day does not consume the only quick option.
+Within eligible recipes, the least-used dishes take priority over repeats;
+pantry/deal bonuses cannot overwhelm that variety preference. When choices are
+limited, repeat counts are balanced and the proposal explains the limitation.
+Near-identical ingredient combinations receive a soft penalty while useful
+ingredient reuse, offers, pantry stock, ratings and expiry still contribute.
+
+Cooking meals planned in the preceding four weeks receive a recency penalty
+that decays with their scheduled meal dates. This works without marking meals
+cooked or rated. Deleted meals/weeks and intentional leftover reservations do
+not count as fresh cooking occurrences. Calendar-week-specific tie ranks avoid
+permanently favouring low recipe ids without randomness. Existing pinned meals
+and explicit leftover links are never rewritten just to improve variety.
+
+The "Try something new" shortlist uses the same recent-plan cooldown and weekly
+tie rotation, balances meal types and ingredient similarity, and excludes
+allergies, incompatible diets, dislikes, inactive recipes and placeholder wishes.
+All ranking and history calculations are local pure services; no derived score
+or new tracking record is stored and no network request is added.
 
 ### 7.4 "Cook once, eat twice"
 
@@ -464,6 +491,11 @@ meal(s) or a gap, and the leftovers link. The hero action is **Plan my week**
 (deterministic, with an optional "ask AI to improve it"). A header shows the
 week range, the estimated cost, and the budget bar. Below: this week's deals
 that touch the plan.
+Day cards can be expanded or collapsed from their headers. Dates before today
+start collapsed; today and future dates start expanded. Headers, people/home
+information and the day-edit shortcut stay visible. Manual expansion choices
+are kept by calendar date while browsing weeks in the current screen session;
+this is display state only and never changes the meal plan or shopping list.
 
 ### Recipes
 
@@ -491,7 +523,16 @@ Appearance (light / dark / system), household and diet, allergies and dislikes,
 budget and default servings, week start day, stores on/off and scraping
 preferences, AI provider, backup and restore, about and What's new.
 Shops open in a separate settings page. Planning defaults and food preferences
-share one **Preferences & defaults** subpage to keep the main Settings page short.
+share one **Preferences & defaults** subpage, including appearance/theme,
+interface language and currency, to keep the main Settings page short.
+The main page uses four card groups: Preferences & defaults with Shops;
+Pantry and homes with Known ingredients; a rounded Check for updates toggle row
+with SeedWorks account, AI provider and Dictation/model selection; and Backup
+and restore with Tutorial, What's New and About. Check for updates is an inline
+toggle, not navigation. Plan-update notifications have no in-app opt-out and
+ignore obsolete saved disable values. Android notification permission remains
+under the user's control and is requested when a plan update needs delivery,
+not by opening Settings or at startup.
 
 ### Stack screens
 
@@ -517,11 +558,20 @@ honest about it.
 Everything else is local. There is no Banana backend, no account, no analytics,
 no telemetry, no crash reporting, no advertising, and no third party.
 
-Dictation uses the operating system's built-in on-device speech recognizer.
+Dictation offers the operating system's built-in on-device speech recognizer or
+user-downloaded multilingual Whisper Base/Small Q5_1 models via `whisper.rn`
+(user-approved local speech inference exception). Dictation settings select the
+engine, model and spoken language independently from the interface language;
+Whisper also supports automatic language detection. Whisper records first and
+transcribes locally after Stop. Model downloads are explicit requests to the
+public `ggerganov/whisper.cpp` Hugging Face repository and its CDN, with pinned
+file sizes and SHA-256 verification. Models live in private Android no-backup
+storage, survive normal updates, and are excluded from backups and household
+sync. No model is automatically downloaded or replaced.
 Banana does not bundle speech-model weights or upload audio. Leaflet recording
 uses Expo Audio with Android's microphone foreground service and its recording
 notification, so it can continue while another app is open. After Stop, Android
-13+ transcribes the saved audio locally; the resulting text is sent to the
+13+ (or Whisper on supported Android versions) transcribes the saved audio locally; the resulting text is sent to the
 user-configured AI for leaflet extraction. Failed transcription keeps the audio
 for retry; successful transcription or explicit cancellation removes it.
 

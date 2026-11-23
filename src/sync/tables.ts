@@ -95,7 +95,7 @@ export const SYNC_TABLES: readonly SyncTable[] = [
 
 export const SYNC_SETTINGS_KEYS = [
   'language', 'theme_mode', 'currency', 'default_servings', 'default_weeknight_minutes',
-  'default_weekend_minutes', 'dinner_only', 'plan_start_day', 'notifications_enabled',
+  'default_weekend_minutes', 'dinner_only', 'plan_start_day',
   'shopping_reminder_hour', 'plan_reminder_day',
 ] as const;
 

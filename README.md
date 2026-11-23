@@ -44,6 +44,47 @@ personal data. SeedWorks also provides your username and aggregate usage reporti
 User-enabled update checks read official GitHub releases, and Update now downloads
 an APK through Android's notification-visible download manager. Android requires
 installation consent. Opening What's New reads official published release notes.
+User-requested Whisper model downloads read public model files from Hugging Face
+and its CDN. Speech recognition itself stays offline; no audio is uploaded.
+
+### Local Whisper dictation
+
+Open **Settings → Dictation** to choose Android's offline recognizer or Whisper,
+set your spoken language independently of the interface language, and download
+multilingual **Base Q5_1 (59.7 MB)** or **Small Q5_1 (190.1 MB)**. Automatic language
+detection is available with Whisper. Start with Base on older phones; Small can
+be more accurate but needs more time, memory and battery.
+
+Whisper records first and transcribes after **Stop**, including for recipe,
+meal-wish, plan-instruction and leaflet dictation. Review the output, especially
+food names, quantities and prices. Leaflet extraction and plan instructions still
+use your configured AI provider after local transcription.
+
+Model downloads require confirmation, show progress, can be cancelled and are
+checked against pinned SHA-256 digests. Keep the settings page open while
+downloading; interrupted downloads restart from the beginning. Installed models
+live in private Android no-backup storage, not the APK or cache. Normal app updates
+keep them; uninstalling or clearing app storage removes them. Models are excluded
+from exported database backups and household sync, and never download or update
+automatically. The native recognizer requires a rebuilt Android app, not Expo Go;
+model downloads and Whisper inference are not available in the web build.
+
+### Planning leftovers
+
+Plan the cooking meal with a recipe, then edit a later meal and choose
+**Meal mode → Leftovers → Leftovers from**. Select the earlier cooking meal and
+the portions to eat. The meals can be different types or non-consecutive days,
+but must be in the same week and home.
+
+For example, reserving two portions of Tuesday's curry for Wednesday makes the
+plan show **Cook 4 portions**, **Eat 2**, and **Keep 2 for Wednesday lunch** on
+Tuesday, with **Leftovers from Tuesday dinner** on Wednesday. Ingredients are
+counted only for Tuesday's cooking total. Editing a reservation adjusts that
+total; changing the leftover meal back to Cook removes its reservation.
+
+Set up links before marking the batch cooked: cooked/eaten batches are protected
+from resizing or reassignment. Established batches are edited meal by meal;
+the consecutive-days shortcut remains available for creating a batch.
 
 ## Key features
 
@@ -52,6 +93,11 @@ installation consent. Opening What's New reads official published release notes.
 - **Time-budget-aware planning** — set the minutes you have each weekday, or
   mark a day `no cook` or `leftovers`; the deterministic planner fits meals to
   the time you actually have.
+- **More varied recommendations** — prioritises different suitable dishes,
+  balances unavoidable repeats, reserves scarce quick options for busy meals,
+  and rotates away from recent weeks. The discovery shortlist also mixes meal
+  types and avoids near-identical suggestions. Existing pins and leftover
+  reservations stay intact; use **Plan my week** to regenerate automatic meals.
 - **Wishes honoured** — pin anything you specifically want to eat and the
   planner works around it.
 - **Cook once, eat twice** — batch cooking and leftovers are first-class,
@@ -82,7 +128,8 @@ installation consent. Opening What's New reads official published release notes.
 - Money is stored as integer cents; physical quantities (grams, millilitres,
   counts) as REAL; durations as integer minutes.
 - External services are limited to configured AI, enabled retailers, SeedWorks,
-  and official public releases. AI credentials and SeedWorks sessions are excluded
+  official public releases and user-requested public Whisper model downloads.
+  AI credentials and SeedWorks sessions are excluded
   from backups and synced domain data.
 - No advertising, tracking analytics, or crash-reporting services.
 

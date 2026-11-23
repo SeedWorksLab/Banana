@@ -1,5 +1,6 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { PaperProvider } from 'react-native-paper';
 import SettingsScreen from '../../src/app/(tabs)/settings';
 import ShopsScreen from '../../src/app/shops';
@@ -12,11 +13,24 @@ const mockPush = jest.fn();
 const mockSaveSettings = jest.fn(async () => {});
 const mockSavePreferences = jest.fn(async () => {});
 const mockSetStoreEnabled = jest.fn(async () => {});
+const mockSaveUpdatePreferences = jest.fn(async (_patch: { enabled: boolean }) => {});
+jest.mock('../../src/database/update-preferences', () => ({
+  getUpdatePreferences: async () => ({ enabled: true, ignoredVersion: null }),
+  saveUpdatePreferences: (patch: { enabled: boolean }) => mockSaveUpdatePreferences(patch),
+}));
+jest.mock('react-native-paper', () => {
+  const actual = jest.requireActual<typeof import('react-native-paper')>('react-native-paper');
+  const React = jest.requireActual<typeof import('react')>('react');
+  const { View } = jest.requireActual<typeof import('react-native')>('react-native');
+  const Menu = Object.assign(
+    ({ visible, anchor, children }: { visible: boolean; anchor: React.ReactNode; children: React.ReactNode }) =>
+      React.createElement(View, null, anchor, visible ? children : null),
+    { Item: actual.Menu.Item },
+  );
+  return { ...actual, Menu };
+});
 jest.mock('expo-router', () => ({
   useFocusEffect: jest.fn(), useRouter: () => ({ push: mockPush }),
-}));
-jest.mock('../../src/services/notifications', () => ({
-  requestNotificationPermission: jest.fn(async () => true),
 }));
 jest.mock('../../src/data/DataProvider', () => ({
   useAppData: () => ({
@@ -66,4 +80,81 @@ it('keeps planning defaults, allergies, dislikes and budget editable on the comb
   expect(mockSavePreferences).toHaveBeenCalledWith({ dislikes: ['Mushrooms'] });
   await fireEvent.changeText(screen.getByLabelText('Weekly budget'), '90');
   expect(mockSavePreferences).toHaveBeenCalledWith({ weeklyBudgetCents: 9000 });
+});
+
+it('groups the settings into appearance, pantry, account/AI and help cards', async () => {
+  await render(<PaperProvider theme={theme}><SettingsScreen /></PaperProvider>);
+  const appearance = within(screen.getByTestId('settings-appearance-group'));
+  expect(appearance.queryByText('Appearance')).toBeNull();
+  expect(screen.queryByTestId('option-Theme')).toBeNull();
+  expect(screen.queryByTestId('option-Language')).toBeNull();
+  expect(appearance.getByRole('button', { name: 'Preferences & defaults' })).toBeTruthy();
+  expect(appearance.getByRole('button', { name: 'Shops' })).toBeTruthy();
+  expect(screen.queryByLabelText('Budget and list currency: Euro (€)')).toBeNull();
+  expect(screen.queryByText('Currency')).toBeNull();
+
+  const pantry = within(screen.getByTestId('settings-pantry-group'));
+  expect(pantry.getByRole('button', { name: 'Pantry and homes' })).toBeTruthy();
+  expect(pantry.getByRole('button', { name: 'Known ingredients' })).toBeTruthy();
+  expect(pantry.queryByRole('button', { name: 'Shops' })).toBeNull();
+
+  const account = within(screen.getByTestId('settings-account-ai-group'));
+  expect(account.queryByText('Reminders')).toBeNull();
+  expect(account.getByRole('switch', { name: 'Check for updates' })).toBeTruthy();
+  expect(screen.queryByRole('switch', { name: 'Plan updates' })).toBeNull();
+  for (const name of ['SeedWorks account', 'AI provider', 'Dictation']) {
+    expect(account.getByRole('button', { name })).toBeTruthy();
+  }
+  expect(account.queryByText('Known ingredients')).toBeNull();
+
+  const help = within(screen.getByTestId('settings-help-group'));
+  for (const name of ['Backup and restore', 'Tutorial', "What's new", 'About']) {
+    expect(help.getByRole('button', { name })).toBeTruthy();
+  }
+});
+
+it('keeps currency editable in Preferences & defaults', async () => {
+  await render(<PaperProvider theme={theme}><PreferencesDefaultsScreen /></PaperProvider>);
+  expect(screen.getByText('Currency')).toBeTruthy();
+  await fireEvent.press(screen.getByTestId('option-Budget and list currency'));
+  await fireEvent.press(screen.getByText('Forint (Ft)'));
+  expect(mockSaveSettings).toHaveBeenCalledWith({ currency: 'HUF' });
+});
+
+it('keeps only the update-check toggle in a rounded, non-navigation row', async () => {
+  await render(<PaperProvider theme={theme}><SettingsScreen /></PaperProvider>);
+  const row = screen.getByTestId('settings-check-updates');
+  expect(StyleSheet.flatten(row.props.style)).toEqual(expect.objectContaining({ borderRadius: lightTheme.radii.pill }));
+  expect(row.props.onPress).toBeUndefined();
+  expect(screen.queryByText('Plan updates')).toBeNull();
+  const updates = screen.getByRole('switch', { name: 'Check for updates' });
+  await waitFor(() => expect(updates.props.accessibilityState.disabled).toBe(false));
+  await fireEvent(updates, 'valueChange', false);
+  expect(mockSaveUpdatePreferences).toHaveBeenCalledWith({ enabled: false });
+  expect(mockSaveSettings).not.toHaveBeenCalled();
+  expect(mockPush).not.toHaveBeenCalled();
+});
+
+it('moves working theme and language controls into Preferences & defaults', async () => {
+  await render(<PaperProvider theme={theme}><PreferencesDefaultsScreen /></PaperProvider>);
+  expect(screen.getByText('Appearance')).toBeTruthy();
+  await fireEvent.press(screen.getByTestId('option-Theme'));
+  await fireEvent.press(screen.getByRole('menuitem', { name: 'Dark' }));
+  expect(mockSaveSettings).toHaveBeenCalledWith({ themeMode: 'dark' });
+  await fireEvent.press(screen.getByTestId('option-Language'));
+  await fireEvent.press(screen.getByRole('menuitem', { name: 'Deutsch' }));
+  expect(mockSaveSettings).toHaveBeenCalledWith({ language: 'de' });
+});
+
+it('preserves navigation for the regrouped account, model and help links', async () => {
+  await render(<PaperProvider theme={theme}><SettingsScreen /></PaperProvider>);
+  const routes = [
+    ['SeedWorks account', '/seedworks'], ['AI provider', '/ai-provider'], ['Dictation', '/dictation-settings'],
+    ['Pantry and homes', '/pantry'], ['Known ingredients', '/ingredients'],
+    ['Backup and restore', '/backup'], ['Tutorial', '/tutorial?replay=1'], ["What's new", '/whats-new'], ['About', '/about'],
+  ];
+  for (const [name, route] of routes) {
+    await fireEvent.press(screen.getByRole('button', { name }));
+    expect(mockPush).toHaveBeenLastCalledWith(route);
+  }
 });

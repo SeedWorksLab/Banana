@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { Pressable, View } from 'react-native';
-import { HelperText, Menu, TextInput as PaperTextInput } from 'react-native-paper';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { HelperText, Menu, Text, TextInput as PaperTextInput } from 'react-native-paper';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import { useAppTheme } from '../theme';
 
 export interface Option<T extends string | number> {
   value: T;
@@ -26,6 +28,7 @@ export function OptionField<T extends string | number>({
   emptyLabel = 'Not set',
   error,
 }: OptionFieldProps<T>) {
+  const theme = useAppTheme();
   const [open, setOpen] = useState(false);
   const selected = options.find((option) => option.value === value);
   const display = selected ? selected.label : emptyLabel;
@@ -41,6 +44,7 @@ export function OptionField<T extends string | number>({
             accessibilityRole="button"
             accessibilityLabel={`${label}: ${display}`}
             accessibilityState={{ expanded: open }}
+            aria-expanded={open}
             testID={`option-${label}`}
           >
             <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
@@ -50,8 +54,22 @@ export function OptionField<T extends string | number>({
                 value={display}
                 editable={false}
                 error={Boolean(error)}
-                right={<PaperTextInput.Icon icon="menu-down" />}
+                contentStyle={{ paddingRight: theme.spacing[8] }}
+                render={({ style }) => (
+                  <View style={[style, { justifyContent: 'center' }]}>
+                    <Text variant="bodyLarge" numberOfLines={1} style={{ color: theme.colors.onSurface }}>
+                      {display}
+                    </Text>
+                  </View>
+                )}
               />
+              <View pointerEvents="none" style={[StyleSheet.absoluteFill, {
+                alignItems: 'flex-end', justifyContent: 'center',
+                paddingRight: theme.spacing[3], paddingTop: theme.spacing[2],
+              }]}>
+                <MaterialCommunityIcons name="menu-down" size={theme.spacing[6]}
+                  color={error ? theme.colors.error : theme.colors.onSurfaceVariant} accessible={false} />
+              </View>
             </View>
           </Pressable>
         }

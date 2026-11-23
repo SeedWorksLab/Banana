@@ -2,11 +2,22 @@ import type { Slot } from '../../src/models';
 import {
   buildDayPlans,
   findSlot,
+  isPastPlanDay,
   slotsByDay,
   weekEndDate,
   weekProgress,
   weekRange,
 } from '../../src/services/week-service';
+
+it.each([
+  ['2026-11-16', '2026-11-18', true],
+  ['2026-11-18', '2026-11-18', false],
+  ['2026-11-19', '2026-11-18', false],
+  ['2025-12-31', '2026-01-01', true],
+  ['2026-01-01', '2025-12-31', false],
+])('identifies past calendar days: %s compared with %s', (date, today, expected) => {
+  expect(isPastPlanDay(date, today)).toBe(expected);
+});
 
 function slot(partial: Partial<Slot>): Slot {
   return {

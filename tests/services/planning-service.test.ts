@@ -42,7 +42,6 @@ describe('scoreRecipe', () => {
     ratings: new Map<number, number>(),
     usedRecipeIds: new Set<number>(),
     usedIngredientIds: new Set<number>(),
-    previousCategory: null,
     defaultServings: 2,
   };
 
@@ -289,5 +288,124 @@ describe('planGap', () => {
       excludeRecipeIds: [1],
     });
     expect(slot.recipeId).toBe(2);
+  });
+});
+
+describe('recipe variety and rotation', () => {
+  const boosted = recipe({
+    id: 1, isFavorite: true, batchFriendly: true,
+    ingredientIds: [1, 2, 3, 4, 5], stockedIngredientIds: [1, 2, 3, 4, 5],
+    onOfferIngredientIds: [1, 2, 3, 4, 5], ingredientCategories: ['produce', 'produce', 'produce', 'produce', 'produce'],
+  });
+
+  it('uses seven suitable recipes once each even when pantry, offers and expiry strongly favour one', () => {
+    const result = planWeek({
+      days: WEEK.map((value) => ({ ...day(value), expiringIngredientIds: [1, 2, 3, 4, 5] })),
+      recipes: [boosted, ...[2, 3, 4, 5, 6, 7].map((id) => recipe({ id }))],
+      history: [{ recipeId: 1, rating: 5 }], defaultServings: 2,
+    });
+    expect(result.slots.map((slot) => slot.recipeId)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('balances unavoidable repeats instead of recommending the same boosted dish every day', () => {
+    const result = planWeek({
+      days: WEEK.map((value) => day(value)), recipes: [boosted, recipe({ id: 2 }), recipe({ id: 3 })], defaultServings: 2,
+    });
+    expect(result.slots.map((slot) => slot.recipeId)).toEqual([1, 2, 3, 1, 2, 3, 1]);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain('not enough different recipes');
+  });
+
+  it('does not let ingredient-reuse rewards fill consecutive meals with near-identical dishes', () => {
+    const result = planWeek({
+      days: [day('mon'), day('tue'), day('wed')],
+      recipes: [
+        recipe({ id: 1, name: 'Pasta A', ingredientIds: [1, 2, 3] }),
+        recipe({ id: 2, name: 'Pasta B', ingredientIds: [1, 2, 3] }),
+        recipe({ id: 3, name: 'Curry', ingredientIds: [4, 5, 6] }),
+      ], defaultServings: 2,
+    });
+    expect(result.slots.map((slot) => slot.recipeId)).toEqual([1, 3, 2]);
+  });
+
+  it('reserves a future pinned meal before assigning earlier automatic meals', () => {
+    const result = planWeek({
+      days: [day('mon'), day('tue'), day('wed')], recipes: [boosted, recipe({ id: 2 }), recipe({ id: 3 })],
+      pinned: [{ day: 'tue', mealType: 'dinner', recipeId: 1, freeText: null }], defaultServings: 2,
+    });
+    expect(result.slots.map((slot) => slot.recipeId)).toEqual([2, 1, 3]);
+    expect(result.slots[1].reason).toBe('Pinned by you');
+  });
+
+  it('allocates the only quick recipe to the tight day before choosing for a flexible day', () => {
+    const result = planWeek({
+      days: [day('mon', 'cook', 60), day('tue', 'cook', 10)],
+      recipes: [{ ...boosted, prepMinutes: 0, cookMinutes: 5 }, recipe({ id: 2, prepMinutes: 5, cookMinutes: 35 })],
+      defaultServings: 2,
+    });
+    expect(result.slots.map((slot) => slot.recipeId)).toEqual([2, 1]);
+    expect(result.slots.map((slot) => slot.day)).toEqual(['mon', 'tue']);
+  });
+
+  it('avoids the previous week’s planned dishes even without cooking or rating records', () => {
+    const result = planWeek({
+      days: WEEK.map((value) => day(value)),
+      recipes: Array.from({ length: 14 }, (_, index) => recipe({ id: index + 1 })),
+      weekStartDate: '2026-11-23',
+      recentUses: WEEK.map((value, index) => ({ recipeId: index + 1, weekStartDate: '2026-11-16', day: value })),
+      defaultServings: 2,
+    });
+    expect(result.slots.map((slot) => slot.recipeId).sort((a, b) => a! - b!)).toEqual([8, 9, 10, 11, 12, 13, 14]);
+  });
+
+  it('breaks equal-score ties by week rather than always by low id, independently of catalogue ordering', () => {
+    const cookbook = Array.from({ length: 8 }, (_, index) => recipe({ id: index + 1 }));
+    const input = { days: WEEK.map((value) => day(value)), recipes: cookbook, defaultServings: 2 };
+    const first = planWeek({ ...input, weekStartDate: '2026-11-16' });
+    const second = planWeek({ ...input, weekStartDate: '2026-11-23' });
+    expect(first.slots.map((slot) => slot.recipeId)).toEqual([1, 3, 7, 6, 8, 2, 5]);
+    expect(second.slots.map((slot) => slot.recipeId)).toEqual([1, 8, 2, 3, 7, 6, 5]);
+    expect(planWeek({ ...input, recipes: [...cookbook].reverse(), weekStartDate: '2026-11-16' })).toEqual(first);
+    expect(cookbook.map((entry) => entry.id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  it('counts untouched cooking meals during partial replanning, but not intentional leftover reservations', () => {
+    const result = planWeek({
+      days: [day('fri')], recipes: [recipe({ id: 1 }), recipe({ id: 2 })], existingRecipeIds: [2, 2],
+      pinned: [
+        { day: 'mon', mealType: 'dinner', recipeId: 1, freeText: null, kind: 'recipe' },
+        { day: 'tue', mealType: 'dinner', recipeId: 1, freeText: null, kind: 'leftovers' },
+        { day: 'wed', mealType: 'dinner', recipeId: 1, freeText: null, kind: 'leftovers' },
+      ], defaultServings: 2,
+    });
+    expect(result.slots[0].recipeId).toBe(1);
+  });
+
+  it.each(['leftovers', 'cook'] as const)('keeps explicitly linked leftovers when the budget mode is %s', (mode) => {
+    const result = planWeek({
+      days: [day('tue', mode, 30)], recipes: [recipe({ id: 1 })],
+      pinned: [{ day: 'tue', mealType: 'dinner', recipeId: 1, freeText: null, kind: 'leftovers' }],
+      defaultServings: 2,
+    });
+    expect(result.slots[0]).toMatchObject({ kind: 'leftovers', recipeId: 1, reason: 'Leftovers reserved by you' });
+  });
+
+  it('does not give a blanket advantage to batch-friendly tags without an actual batch reservation', () => {
+    const context = { ratings: new Map<number, number>(), usedRecipeIds: new Set<number>(),
+      usedIngredientIds: new Set<number>(), defaultServings: 2 };
+    expect(scoreRecipe(recipe({ batchFriendly: true }), day('mon'), context))
+      .toBe(scoreRecipe(recipe({ batchFriendly: false }), day('mon'), context));
+    expect(scoreRecipe(recipe({ id: 1 }), day('mon'), { ...context, recipeUseCounts: new Map([[1, 3]]) }))
+      .toBeLessThan(scoreRecipe(recipe({ id: 1 }), day('mon'), { ...context, recipeUseCounts: new Map([[1, 1]]) }));
+  });
+
+  it('applies recent rotation and a genuine unused-first preference to gap recommendations', () => {
+    expect(planGap(day('wed'), [boosted, recipe({ id: 2 })],
+      { defaultServings: 2, excludeRecipeIds: [1] }).recipeId).toBe(2);
+    expect(planGap(day('wed'), [recipe({ id: 1 }), recipe({ id: 2 })], {
+      defaultServings: 2, weekStartDate: '2026-11-23',
+      recentUses: [{ recipeId: 1, weekStartDate: '2026-11-16', day: 'sun' }],
+    }).recipeId).toBe(2);
   });
 });

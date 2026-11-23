@@ -303,4 +303,19 @@ UPDATE settings SET value = '0' WHERE key = 'dinner_only';
         WHERE batch_source_uuid = NEW.uuid AND cooked_at IS NULL;
       END;`,
   },
+  {
+    id: 14,
+    description: 'Preserve valid leftover links when adjusting batch portions',
+    sql: `DROP TRIGGER IF EXISTS trg_batch_source_changed;
+      CREATE TRIGGER IF NOT EXISTS trg_batch_source_changed
+      AFTER UPDATE OF recipe_id, kind, servings, day, meal_type ON slots
+      WHEN OLD.recipe_id IS NOT NEW.recipe_id OR OLD.kind <> NEW.kind
+        OR OLD.day <> NEW.day OR OLD.meal_type <> NEW.meal_type
+        OR NEW.servings <= (SELECT COALESCE(SUM(servings), 0) FROM slots
+          WHERE batch_source_uuid = NEW.uuid AND deleted = 0)
+      BEGIN
+        UPDATE slots SET deleted = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE batch_source_uuid = NEW.uuid AND cooked_at IS NULL;
+      END;`,
+  },
 ];

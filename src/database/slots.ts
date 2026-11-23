@@ -87,13 +87,13 @@ export async function getSlot(id: number, db?: SQLiteDatabase): Promise<Slot | n
 
 export async function getRecipeHistory(
   db?: SQLiteDatabase
-): Promise<{ recipeId: number; rating: number | null }[]> {
+): Promise<{ recipeId: number; rating: number | null; kind: SlotKind }[]> {
   const database = db ?? (await getDatabase());
-  const rows = await database.getAllAsync<{ recipe_id: number; rating: number | null }>(
-    `SELECT recipe_id, rating FROM slots
+  const rows = await database.getAllAsync<{ recipe_id: number; rating: number | null; kind: string }>(
+    `SELECT recipe_id, rating, kind FROM slots
       WHERE deleted = 0 AND recipe_id IS NOT NULL AND cooked_at IS NOT NULL`
   );
-  return rows.map((row) => ({ recipeId: row.recipe_id, rating: row.rating }));
+  return rows.map((row) => ({ recipeId: row.recipe_id, rating: row.rating, kind: parseKind(row.kind) }));
 }
 
 export async function createSlot(input: SlotInput, db?: SQLiteDatabase): Promise<number> {

@@ -2,6 +2,8 @@ import { MAIN_MEAL_TYPES, type IngredientCategory, type MealMode, type MealSetti
 import { computeRatings, isEatingOut, recipeMealTypes, type RatingEntry } from './recipe-service';
 import { allowsRecipeForMeal } from './meal-settings-service';
 import type { PreferenceRecipe } from './preference-service';
+import type { RecipeUse } from '../models/recipe-use';
+import { recipeRecencyPenalties, recipeRotationRank } from './recipe-rotation-service';
 
 export interface PlannerRecipe extends PreferenceRecipe {
   servings: number;
@@ -28,6 +30,7 @@ export interface PinnedWish {
   mealType: MealType;
   recipeId: number | null;
   freeText: string | null;
+  kind?: SlotKind;
 }
 
 export interface ProposedSlot {
@@ -48,6 +51,9 @@ export interface PlanWeekInput {
   pinned?: readonly PinnedWish[];
   defaultServings: number;
   mealType?: MealType;
+  weekStartDate?: string;
+  recentUses?: readonly RecipeUse[];
+  existingRecipeIds?: readonly number[];
 }
 
 export interface PlanProposal {
@@ -59,27 +65,30 @@ interface ScoreContext {
   ratings: ReadonlyMap<number, number>;
   usedRecipeIds: ReadonlySet<number>;
   usedIngredientIds: ReadonlySet<number>;
-  previousCategory: MealType | null;
   defaultServings: number;
+  recipeUseCounts?: ReadonlyMap<number, number>;
+  recencyPenalties?: ReadonlyMap<number, number>;
+  rotationKey?: string;
+  chosenIngredientSets?: readonly ReadonlySet<number>[];
 }
 
 /**
  * Scores a candidate for one day. Higher is better. The planner is an
  * optimizer, not a randomizer: the score is a pure function of the inputs and
- * the final tie-break is the recipe id, so the same week always plans the same
+ * weekly rotation only breaks ties, so the same inputs always plan the same
  * way (AGENTS.md §8).
  *
- * Two objectives beyond "it fits" are explicit:
+ * Objectives beyond "it fits" are explicit:
  *  - variety: a recipe already cooked this week is penalised, and so is a recipe
- *    in the same category as the previous day;
+ *    with increasing penalties for repeated cooking;
  *  - short trips: a recipe reusing ingredients the week already needs, or using
  *    ingredients that are on offer, is rewarded so the list stays small;
  *  - variety and health: a recipe built around more fresh produce scores higher,
  *    so an all-meat week never wins on time or price alone;
  *  - use what is in the house: ingredients already stocked in the pantry are
  *    rewarded, so the plan starts from food that would otherwise be wasted;
- *  - cook once, eat twice: a batch-friendly recipe earns a bonus, because
- *    leftovers are the cheapest way to gain a cook-free day.
+ * Explicit batches are reserved by the user; a batch-friendly tag alone must
+ * not keep a recipe at the top of every automatic plan.
  */
 export function scoreRecipe(
   recipe: PlannerRecipe,
@@ -96,23 +105,26 @@ export function scoreRecipe(
   }
 
   score += (context.ratings.get(recipe.id) ?? 3) * 4;
-  if (context.usedRecipeIds.has(recipe.id)) {
-    score -= 25;
-  }
-  if (recipe.batchFriendly) {
-    score += 8;
-  }
+  const uses = context.recipeUseCounts?.get(recipe.id) ?? (context.usedRecipeIds.has(recipe.id) ? 1 : 0);
+  score -= uses * 25;
+  score -= context.recencyPenalties?.get(recipe.id) ?? 0;
   if (recipe.isFavorite) {
     score += 2;
-  }
-  if (context.previousCategory === recipe.category) {
-    score -= 3;
   }
 
   const ingredientIds = recipe.ingredientIds ?? [];
   const reused = ingredientIds.filter((id) => context.usedIngredientIds.has(id)).length;
   if (reused > 0) {
     score += Math.min(reused, 5) * 4;
+  }
+  const uniqueIngredients = new Set(ingredientIds);
+  if (uniqueIngredients.size >= 3) {
+    const nearDuplicates = (context.chosenIngredientSets ?? []).filter((previous) => {
+      const overlap = [...uniqueIngredients].filter((id) => previous.has(id)).length;
+      const union = new Set([...uniqueIngredients, ...previous]).size;
+      return previous.size >= 3 && overlap / union >= 0.8;
+    }).length;
+    score -= Math.min(nearDuplicates, 2) * 24;
   }
   const onOffer = recipe.onOfferIngredientIds?.length ?? 0;
   if (onOffer > 0) {
@@ -142,8 +154,8 @@ export function scoreRecipe(
 
 /**
  * Plans the three main meals (and explicitly enabled snacks), honouring meal modes and pinned
- * wishes. Pinned days are taken first and are excluded from the automatic picks
- * so a wish is never planned twice.
+ * wishes. Reservations count before automatic picks, which prefer other suitable
+ * recipes and only repeat when the available choices require it.
  */
 export function planWeek(input: PlanWeekInput): PlanProposal {
   const history = input.history ?? [];
@@ -159,11 +171,31 @@ export function planWeek(input: PlanWeekInput): PlanProposal {
   const recipeById = new Map(input.recipes.map((recipe) => [recipe.id, recipe]));
   const usedRecipeIds = new Set<number>();
   const usedIngredientIds = new Set<number>();
+  const recipeUseCounts = new Map<number, number>();
+  const chosenIngredientSets: ReadonlySet<number>[] = [];
   const pinnedByKey = new Map(pinned.map((wish) => [`${wish.day}|${wish.mealType}`, wish]));
+  const recencyPenalties = input.weekStartDate
+    ? recipeRecencyPenalties(input.recentUses ?? [], input.weekStartDate) : new Map<number, number>();
+  const registerRecipe = (recipeId: number) => {
+    usedRecipeIds.add(recipeId);
+    recipeUseCounts.set(recipeId, (recipeUseCounts.get(recipeId) ?? 0) + 1);
+    for (const ingredientId of recipeById.get(recipeId)?.ingredientIds ?? []) usedIngredientIds.add(ingredientId);
+    const ingredients = recipeById.get(recipeId)?.ingredientIds ?? [];
+    if (ingredients.length >= 3) chosenIngredientSets.push(new Set(ingredients));
+  };
+  for (const recipeId of input.existingRecipeIds ?? []) registerRecipe(recipeId);
+  for (const wish of pinnedByKey.values()) {
+    if (wish.recipeId === null || wish.kind === 'leftovers') continue;
+    const recipe = recipeById.get(wish.recipeId);
+    const day = input.days.find((entry) => entry.day === wish.day);
+    const setting = day ? mealSetting(day, wish.mealType, input.mealType === 'snack') : null;
+    if (recipe && (setting ? allowsRecipeForMeal(recipe, setting) : recipeMealTypes(recipe).includes(wish.mealType))) {
+      registerRecipe(recipe.id);
+    }
+  }
 
   const slots: ProposedSlot[] = [];
   const warnings: string[] = [];
-  let previousCategory: MealType | null = null;
 
   const requestedMeals = input.days.flatMap((day) => {
     const mealTypes = input.mealType ? [input.mealType] : [
@@ -172,21 +204,30 @@ export function planWeek(input: PlanWeekInput): PlanProposal {
     ];
     return mealTypes.map((mealType) => ({ day, mealType }));
   });
-  for (const { day, mealType } of requestedMeals) {
-    const setting = day.mealSettings?.find((entry) => entry.mealType === mealType) ?? {
-      mealType, mode: day.mode, cookMinutes: day.cookMinutes, enabled: mealType !== 'snack' || input.mealType === 'snack',
-    };
+  const order = new Map(requestedMeals.map(({ day, mealType }, index) => [`${day.day}|${mealType}`, index]));
+  // Reserve scarce choices before flexible days can consume the only quick or meal-specific recipe.
+  const scheduled = requestedMeals.map((request, index) => {
+    const setting = mealSetting(request.day, request.mealType, input.mealType === 'snack');
+    const wish = pinnedByKey.get(`${request.day.day}|${request.mealType}`);
+    const scarcity = wish ? -1 : cookCandidates(
+      { ...request.day, mode: setting.mode, cookMinutes: setting.cookMinutes }, request.mealType, input.recipes,
+    ).length;
+    return { ...request, setting, scarcity, index };
+  }).sort((a, b) => a.scarcity - b.scarcity || a.index - b.index);
+  for (const { day, mealType, setting } of scheduled) {
     if (!setting.enabled) continue;
     const mealDay = { ...day, mode: setting.mode, cookMinutes: setting.cookMinutes };
     const wish = pinnedByKey.get(`${day.day}|${mealType}`);
     const wishedRecipe = wish?.recipeId != null ? recipeById.get(wish.recipeId) : null;
+    if (wish?.kind === 'leftovers') {
+      slots.push({
+        day: day.day, mealType, kind: 'leftovers', recipeId: wishedRecipe?.id ?? null, freeText: null,
+        servings: day.servings ?? input.defaultServings, reason: 'Leftovers reserved by you', score: Number.POSITIVE_INFINITY,
+      });
+      continue;
+    }
     if (wish && (wish.recipeId === null || (wishedRecipe && allowsRecipeForMeal(wishedRecipe, setting)))) {
       if (wish.recipeId !== null) {
-        usedRecipeIds.add(wish.recipeId);
-        const pinnedRecipe = recipeById.get(wish.recipeId);
-        for (const ingredientId of pinnedRecipe?.ingredientIds ?? []) {
-          usedIngredientIds.add(ingredientId);
-        }
         slots.push({
           day: day.day,
           mealType,
@@ -197,7 +238,6 @@ export function planWeek(input: PlanWeekInput): PlanProposal {
           reason: 'Pinned by you',
           score: Number.POSITIVE_INFINITY,
         });
-        previousCategory = pinnedRecipe?.category ?? previousCategory;
       } else if (wish.freeText && wish.freeText.trim() !== '') {
         slots.push({
           day: day.day,
@@ -209,7 +249,6 @@ export function planWeek(input: PlanWeekInput): PlanProposal {
           reason: 'Pinned by you',
           score: Number.POSITIVE_INFINITY,
         });
-        previousCategory = null;
       } else {
         slots.push({
           day: day.day,
@@ -221,7 +260,6 @@ export function planWeek(input: PlanWeekInput): PlanProposal {
           reason: 'Left blank by you',
           score: Number.POSITIVE_INFINITY,
         });
-        previousCategory = null;
       }
       continue;
     }
@@ -237,7 +275,6 @@ export function planWeek(input: PlanWeekInput): PlanProposal {
         reason: 'No cooking planned',
         score: 0,
       });
-      previousCategory = null;
       continue;
     }
 
@@ -252,7 +289,6 @@ export function planWeek(input: PlanWeekInput): PlanProposal {
         reason: 'Leftovers night',
         score: 0,
       });
-      previousCategory = null;
       continue;
     }
 
@@ -260,21 +296,32 @@ export function planWeek(input: PlanWeekInput): PlanProposal {
       ratings,
       usedRecipeIds,
       usedIngredientIds,
-      previousCategory,
       defaultServings: input.defaultServings,
+      recipeUseCounts,
+      recencyPenalties,
+      rotationKey: input.weekStartDate,
+      chosenIngredientSets,
     }, warnings);
     if (slot.recipeId !== null) {
-      usedRecipeIds.add(slot.recipeId);
-      for (const ingredientId of recipeById.get(slot.recipeId)?.ingredientIds ?? []) {
-        usedIngredientIds.add(ingredientId);
-      }
+      registerRecipe(slot.recipeId);
     }
-    const chosen = slot.recipeId !== null ? recipeById.get(slot.recipeId) : null;
-    previousCategory = chosen?.category ?? previousCategory;
     slots.push(slot);
   }
 
+  slots.sort((a, b) => (order.get(`${a.day}|${a.mealType}`) ?? 0) - (order.get(`${b.day}|${b.mealType}`) ?? 0));
   return { slots, warnings };
+}
+
+function mealSetting(day: PlannerDay, mealType: MealType, explicitSnack = false): MealSetting {
+  return day.mealSettings?.find((entry) => entry.mealType === mealType) ?? {
+    mealType, mode: day.mode, cookMinutes: day.cookMinutes, enabled: mealType !== 'snack' || explicitSnack,
+  };
+}
+
+function cookCandidates(day: PlannerDay, mealType: MealType, recipes: readonly PlannerRecipe[]): PlannerRecipe[] {
+  return recipes.filter((recipe) =>
+    recipeMealTypes(recipe).includes(mealType) && isEatingOut(recipe) === (day.mode === 'eating_out') &&
+    (day.mode === 'eating_out' || recipe.prepMinutes + recipe.cookMinutes <= day.cookMinutes));
 }
 
 function decideCook(
@@ -284,9 +331,7 @@ function decideCook(
   context: ScoreContext,
   warnings: string[]
 ): ProposedSlot {
-  const candidates = recipes.filter((recipe) =>
-    recipeMealTypes(recipe).includes(mealType) && isEatingOut(recipe) === (day.mode === 'eating_out') &&
-    (day.mode === 'eating_out' || recipe.prepMinutes + recipe.cookMinutes <= day.cookMinutes));
+  const candidates = cookCandidates(day, mealType, recipes);
   if (candidates.length === 0) {
     warnings.push(`No suitable ${day.mode === 'eating_out' ? 'eating-out ' : ''}${mealType} recipe fits ${day.day}.`);
     return {
@@ -301,12 +346,20 @@ function decideCook(
     };
   }
 
+  // Pantry and deal bonuses must not beat a suitable unused recipe merely by overwhelming a fixed repeat penalty.
   const ranked = candidates
-    .map((recipe) => ({ recipe, score: scoreRecipe(recipe, day, context) }))
-    .sort((a, b) => b.score - a.score || a.recipe.id - b.recipe.id);
+    .map((recipe) => ({
+      recipe, score: scoreRecipe(recipe, day, context),
+      uses: context.recipeUseCounts?.get(recipe.id) ?? (context.usedRecipeIds.has(recipe.id) ? 1 : 0),
+    }))
+    .sort((a, b) => a.uses - b.uses || b.score - a.score ||
+      (context.rotationKey ? recipeRotationRank(context.rotationKey, a.recipe.id) - recipeRotationRank(context.rotationKey, b.recipe.id) : 0) ||
+      a.recipe.id - b.recipe.id);
 
   const best = ranked[0];
   const total = best.recipe.prepMinutes + best.recipe.cookMinutes;
+  const repeatWarning = 'Some meals repeat because there are not enough different recipes that fit their meal types and cooking times.';
+  if (best.uses > 0 && !warnings.includes(repeatWarning)) warnings.push(repeatWarning);
 
   return {
     day: day.day,
@@ -315,7 +368,8 @@ function decideCook(
     recipeId: best.recipe.id,
     freeText: null,
     servings: day.servings ?? context.defaultServings,
-    reason: day.mode === 'eating_out' ? 'Eating out, as requested' : `Fits your ${day.cookMinutes} min (about ${total} min)`,
+    reason: day.mode === 'eating_out' ? 'Eating out, as requested'
+      : `${best.uses > 0 ? 'Repeat: limited suitable alternatives. ' : ''}Fits your ${day.cookMinutes} min (about ${total} min)`,
     score: best.score,
   };
 }
@@ -333,6 +387,8 @@ export function planGap(
     history?: readonly RatingEntry[];
     excludeRecipeIds?: readonly number[];
     usedIngredientIds?: readonly number[];
+    weekStartDate?: string;
+    recentUses?: readonly RecipeUse[];
   }
 ): ProposedSlot {
   if (day.mode === 'no_cook' || day.mode === 'leftovers') {
@@ -355,8 +411,9 @@ export function planGap(
       ratings,
       usedRecipeIds,
       usedIngredientIds,
-      previousCategory: null,
       defaultServings: options.defaultServings,
+      rotationKey: options.weekStartDate,
+      recencyPenalties: options.weekStartDate ? recipeRecencyPenalties(options.recentUses ?? [], options.weekStartDate) : undefined,
     },
     warnings
   );

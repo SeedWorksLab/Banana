@@ -25,7 +25,7 @@ you need a pattern; **never modify anything under the Coconut or PassionFruit
 directories.**
 
 Local SQLite is the single source of truth. The app works fully offline. There
-are four permitted outbound network uses:
+are five permitted outbound network uses:
 
 1. the AI provider the user configured, and only when the user invokes an AI
    feature;
@@ -36,6 +36,10 @@ are four permitted outbound network uses:
    consent-based shared-household membership and data sharing.
 4. User-enabled release checks and APK downloads, following Coconut's
    implementation and respecting Android installation consent.
+5. User-invoked Whisper Base/Small model downloads from the public
+   `ggerganov/whisper.cpp` Hugging Face repository and its download CDN.
+   Verify pinned SHA-256 digests before installation/use. Models stay in Android
+   private no-backup storage across updates; no audio is uploaded.
 
 Items 3–4 are user-approved for 0.3.0. Keep network transports separate from pure
 services. Personal datasets remain isolated from shared household datasets;
@@ -61,7 +65,8 @@ Forbidden additions:
 
 - Redux / MobX / Zustand or any state-management framework
 - Any backend or cloud service except the approved SeedWorks integration
-- Any network use except AI, deal scraping, SeedWorks and release updates
+- Any network use except AI, deal scraping, SeedWorks, release updates and
+  explicitly requested Whisper model downloads
 - Ads, analytics, telemetry, or crash-reporting SDKs
 - `react-native-vector-icons` (use `@expo/vector-icons`, which ships with Expo)
 - An HTML-parsing library for the scraper (use `fetch` and string parsing)
@@ -313,9 +318,14 @@ separate from `src/services/`, which stays pure.
 
 **Non-negotiable AI rules** (identical to Cherry):
 
-1. No local LLM inference or bundled weights. User-approved exception:
-   dictation uses Android's built-in on-device speech recognizer; audio stays
-   local. Expo Audio is approved for background leaflet recording.
+1. No local LLM inference or bundled weights. User-approved speech exceptions:
+   dictation may use Android's on-device recognizer or downloaded multilingual
+   Whisper Base/Small Q5_1 models through `whisper.rn` (including its required
+   `buffer` compatibility dependency). The native integration dependency and
+   user-invoked model downloads are approved. Model weights must
+   not be bundled in the APK. Audio stays local. Expo Audio is approved for
+   dictation and background leaflet recording. Models are not included in
+   backups or household sync, and are never silently replaced/downloaded.
 2. Credentials are never hardcoded, never logged, never committed, never included
    in a backup, and never sent anywhere except the configured base URL.
 3. Network failures never destroy data. A failed AI call is inert.

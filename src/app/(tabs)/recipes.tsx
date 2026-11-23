@@ -35,6 +35,7 @@ export default function RecipesScreen() {
   const [dictationOpen, setDictationOpen] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [dictating, setDictating] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const dictationRef = useRef<LiveTranscriptionHandle | null>(null);
@@ -77,6 +78,7 @@ export default function RecipesScreen() {
       dictationRef.current = startLiveTranscription({
         language: settings.language,
         contextualStrings: recipes.map((recipe) => recipe.name),
+        onProcessing: setTranscribing,
         onTranscript: (text) => setTranscript([transcript.trim(), text].filter(Boolean).join('\n')),
         onError: (message) => {
           setToast(message);
@@ -97,12 +99,14 @@ export default function RecipesScreen() {
 
   const stopDictation = useCallback(async () => {
     const handle = dictationRef.current;
-    dictationRef.current = null;
     if (!handle) {
       return;
     }
     await handle.stop();
-    setDictating(false);
+    if (dictationRef.current === handle) {
+      dictationRef.current = null;
+      setDictating(false);
+    }
   }, []);
 
   const closeDictation = useCallback(() => {
@@ -235,10 +239,10 @@ export default function RecipesScreen() {
           />
           <Pressable
             onPress={() => void (dictating ? stopDictation() : startDictation())}
-            disabled={busy}
+            disabled={busy || transcribing}
             accessibilityRole="button"
-            accessibilityLabel={dictating ? 'Stop recipe dictation' : 'Start recipe dictation'}
-            accessibilityState={{ busy: dictating, disabled: busy }}
+            accessibilityLabel={transcribing ? 'Transcribing recipe' : dictating ? 'Stop recipe dictation' : 'Start recipe dictation'}
+            accessibilityState={{ busy: dictating, disabled: busy || transcribing }}
             style={({ pressed }) => [
               styles.talkButton,
               {
@@ -256,7 +260,7 @@ export default function RecipesScreen() {
               size={22}
               color={theme.colors.onSurfaceVariant}
             />
-            <Text variant="labelLarge">{dictating ? 'Stop dictation' : 'Start dictation'}</Text>
+            <Text variant="labelLarge">{transcribing ? 'Transcribing…' : dictating ? 'Stop dictation' : 'Start dictation'}</Text>
           </Pressable>
         </AppDialog.Content>
         <AppDialog.Actions>

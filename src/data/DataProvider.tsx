@@ -1,6 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { SQLiteDatabase } from 'expo-sqlite';
-import { planBatchCooking } from '../services/batch-cooking-service';
+import { assertBatchHomeChange, batchCookServings, planBatchCooking } from '../services/batch-cooking-service';
+import { setMealLeftovers as setMealLeftoversRow, unlinkMealLeftovers } from '../database/batch-meals';
+import { getRecipeUsesBeforeWeek } from '../database/recipe-uses';
+import type { RecipeUse } from '../models/recipe-use';
 import { useCloudSync } from '../sync/use-cloud-sync';
 import { switchDataContext } from '../database/data-contexts';
 import { subscribeToDataChanges } from '../sync/realtime';
@@ -150,6 +153,7 @@ export interface WeekPlan {
   budgets: WeekDayBudget[];
   slots: Slot[];
   shoppingItems: ShoppingItem[];
+  recentRecipeUses: RecipeUse[];
 }
 
 export interface ManualShoppingItemInput {
@@ -282,6 +286,7 @@ export interface AppData {
   ) => Promise<void>;
   createSlot: (input: SlotInput) => Promise<number>;
   cookForDays: (weekId: number, day: WeekDay, mealType: MealType, recipeId: number, days: number, servings: number, cookMinutes: number, homeId: number | null) => Promise<void>;
+  setMealLeftovers: (weekId: number, day: WeekDay, mealType: MealType, sourceUuid: string, servings: number, homeId: number | null) => Promise<void>;
   updateSlot: (id: number, input: Omit<SlotInput, 'weekId'>) => Promise<void>;
   deleteSlot: (id: number) => Promise<void>;
   setSlotRating: (id: number, rating: number | null) => Promise<void>;
@@ -809,12 +814,13 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       loadWeekPlan: async (weekStartDate) =>
         withDb(async (db) => {
           const week = await ensureWeek(weekStartDate, db);
-          const [budgets, slots, shoppingItems] = await Promise.all([
+          const [budgets, slots, shoppingItems, recentRecipeUses] = await Promise.all([
             getWeekDayBudgets(week.id, db),
             getSlotsByWeek(week.id, db),
             getShoppingItems(week.id, db),
+            getRecipeUsesBeforeWeek(weekStartDate, db),
           ]);
-          return { week, budgets, slots, shoppingItems };
+          return { week, budgets, slots, shoppingItems, recentRecipeUses };
         }),
       setDayBudget: async (weekId, day, mode, cookMinutes, servings, homeId) => {
         await withDb(async (db) => {
@@ -859,7 +865,22 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       },
       setMealBudget: async (weekId, day, meal, servings, homeId) => {
         await withDb(async (db) => {
-          const current = (await getWeekDayBudgets(weekId, db)).find((row) => row.day === day);
+          const budgets = await getWeekDayBudgets(weekId, db);
+          const beforeSlots = await getSlotsByWeek(weekId, db);
+          const existing = beforeSlots.find((slot) => slot.day === day && slot.mealType === meal.mealType);
+          if (existing?.cookedAt || (existing?.uuid && beforeSlots.some((slot) =>
+            slot.batchSourceUuid === existing.uuid && slot.cookedAt !== null))) {
+            throw new Error('This meal or one of its reserved portions is already cooked or eaten.');
+          }
+          assertBatchHomeChange(beforeSlots, budgets, day, homeId, defaultHome?.id ?? null);
+          if (existing?.uuid && beforeSlots.some((slot) => slot.batchSourceUuid === existing.uuid) &&
+              (meal.mode !== 'cook' || !meal.enabled)) {
+            throw new Error('This cooking meal supplies leftovers. Remove or relink those meals first.');
+          }
+          if (existing?.batchSourceUuid && (meal.mode !== 'leftovers' || !meal.enabled)) {
+            await unlinkMealLeftovers(weekId, existing.id, db);
+          }
+          const current = budgets.find((row) => row.day === day);
           await upsertWeekDayBudget({
             weekId, day, mode: current?.mode ?? 'cook',
             cookMinutes: current?.cookMinutes ?? settings.defaultWeeknightMinutes,
@@ -893,6 +914,10 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
             (slot) => slot.day === day && slot.mealType === mealType
           );
           const text = freeText?.trim() || null;
+          const reserved = slots.filter((slot) => existing?.uuid && slot.batchSourceUuid === existing.uuid);
+          if (reserved.length && (recipeId !== existing?.recipeId || existing?.cookedAt || reserved.some((slot) => slot.cookedAt !== null))) {
+            throw new Error('Remove or relink the leftover meals before changing this cooking meal. Cooked batches cannot be resized.');
+          }
           if (existing?.batchSourceUuid) {
             throw new Error('Edit the original cooking day to change a batch meal.');
           }
@@ -914,10 +939,6 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
           const kind = recipeId !== null ? 'recipe' : 'free_text';
           const resolvedText = recipeId !== null ? null : text;
           if (existing) {
-            for (const reserved of slots.filter((slot) => slot.batchSourceUuid === existing.uuid && existing.uuid !== null)) {
-              if (reserved.cookedAt !== null) throw new Error('A reserved leftover meal is already eaten.');
-              await deleteSlotRow(reserved.id, db);
-            }
             await updateSlotRow(
               existing.id,
               {
@@ -926,7 +947,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
                 kind,
                 recipeId,
                 freeText: resolvedText,
-                servings,
+                servings: reserved.length ? batchCookServings(servings, reserved) : servings,
                 note: null,
                 pinned: true,
                 sortOrder: existing.sortOrder,
@@ -1019,6 +1040,11 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
             }
           });
         });
+      },
+      setMealLeftovers: async (weekId, day, mealType, sourceUuid, servings, homeId) => {
+        await withDb((db) => setMealLeftoversRow({
+          weekId, day, mealType, sourceUuid, servings, homeId, defaultHomeId: defaultHome?.id ?? null,
+        }, db));
       },
       createSlot: async (input) => withDb((db) => createSlotRow(input, db)),
       updateSlot: async (id, input) => withDb((db) => updateSlotRow(id, input, db)),
@@ -1720,7 +1746,9 @@ async function replanDays(
   options: ApplyOptions,
   changedDays: Set<WeekDay>
 ): Promise<void> {
-  const [recipes, recipeIngredients, ingredients, tags, pantry, deals, matches, history, budgets] =
+  const week = await getWeek(weekId, db);
+  if (!week) throw new Error('This week no longer exists.');
+  const [recipes, recipeIngredients, ingredients, tags, pantry, deals, matches, history, budgets, recentUses] =
     await Promise.all([
       getAllRecipes(db),
       getAllRecipeIngredients(db),
@@ -1731,6 +1759,7 @@ async function replanDays(
       getAllDealMatches(db),
       getRecipeHistory(db),
       getWeekDayBudgets(weekId, db),
+      getRecipeUsesBeforeWeek(week.weekStartDate, db),
     ]);
   const today = todayDate();
   const activeDeals = new Set(deals.filter((deal) => isDealActive(deal, today)).map((deal) => deal.id));
@@ -1742,7 +1771,7 @@ async function replanDays(
       .filter((match) => match.status !== 'rejected' && activeDeals.has(match.dealId))
       .map((match) => match.ingredientId)
   );
-  const summaries = buildRecipeSummaries(recipes.filter((recipe) => !recipe.isWish), tags);
+  const summaries = buildRecipeSummaries(recipes.filter((recipe) => !recipe.isWish && recipe.active && !recipe.deleted), tags);
   const plannerRecipes: PlannerRecipe[] = filterRecipesForPreferences(
     buildPlannerRecipes(
       summaries,
@@ -1778,9 +1807,13 @@ async function replanDays(
     }),
     recipes: plannerRecipes,
     history,
+    weekStartDate: week.weekStartDate,
+    recentUses,
+    existingRecipeIds: slots.filter((slot) => !days.includes(slot.day) && !slot.pinned &&
+      slot.cookedAt === null && slot.kind === 'recipe' && slot.recipeId !== null).map((slot) => slot.recipeId!),
     defaultServings: options.preferences.defaultServings,
     pinned: slots.filter((slot) => slot.pinned || slot.cookedAt !== null).map((slot) => ({
-      day: slot.day, mealType: slot.mealType, recipeId: slot.recipeId, freeText: slot.freeText,
+      day: slot.day, mealType: slot.mealType, recipeId: slot.recipeId, freeText: slot.freeText, kind: slot.kind,
     })),
   });
   for (const slot of slots) {

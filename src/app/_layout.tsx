@@ -35,6 +35,7 @@ function ThemedContent() {
           <Stack.Screen name="pantry" options={{ title: t('screen.pantry') }} />
           <Stack.Screen name="ingredients" options={{ title: 'Known ingredients' }} />
           <Stack.Screen name="ai-provider" options={{ title: t('screen.ai') }} />
+          <Stack.Screen name="dictation-settings" options={{ title: 'Dictation' }} />
           <Stack.Screen name="shops" options={{ title: t('settings.shops') }} />
           <Stack.Screen name="preferences-defaults" options={{ title: t('settings.preferencesDefaults') }} />
           <Stack.Screen name="backup" options={{ title: t('screen.backup') }} />

@@ -14,7 +14,6 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultWeekendMinutes: 90,
   dinnerOnly: false,
   planStartDay: 'sat',
-  notificationsEnabled: true,
   shoppingReminderHour: 9,
   planReminderDay: 'fri',
   tutorialSeen: false,
@@ -31,7 +30,6 @@ type SettingsKey =
   | 'default_weekend_minutes'
   | 'dinner_only'
   | 'plan_start_day'
-  | 'notifications_enabled'
   | 'shopping_reminder_hour'
   | 'plan_reminder_day'
   | 'tutorial_seen'
@@ -47,7 +45,6 @@ const SETTINGS_KEY_MAP: Record<keyof Settings, SettingsKey> = {
   defaultWeekendMinutes: 'default_weekend_minutes',
   dinnerOnly: 'dinner_only',
   planStartDay: 'plan_start_day',
-  notificationsEnabled: 'notifications_enabled',
   shoppingReminderHour: 'shopping_reminder_hour',
   planReminderDay: 'plan_reminder_day',
   tutorialSeen: 'tutorial_seen',
@@ -117,9 +114,6 @@ function rowToSettings(rows: { key: SettingsKey; value: string }[]): Settings {
         break;
       case 'plan_start_day':
         settings.planStartDay = parseWeekDay(row.value, DEFAULT_SETTINGS.planStartDay);
-        break;
-      case 'notifications_enabled':
-        settings.notificationsEnabled = row.value !== '0' && row.value !== 'false';
         break;
       case 'shopping_reminder_hour':
         settings.shoppingReminderHour = clampInt(

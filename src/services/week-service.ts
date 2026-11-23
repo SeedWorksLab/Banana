@@ -21,6 +21,10 @@ export interface DefaultDayBudget {
   cookMinutes: number;
 }
 
+export function isPastPlanDay(date: string, today: string): boolean {
+  return date < today;
+}
+
 export function weekEndDate(weekStartDate: string): string {
   return addDays(weekStartDate, 6);
 }

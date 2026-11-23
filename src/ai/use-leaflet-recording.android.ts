@@ -43,7 +43,7 @@ export function useLeafletRecording(language: string, contextualStrings: string[
     setError(null);
     try {
       if (!supportsRecordedTranscription()) {
-        throw new Error('Recorded transcription needs Android 13 or newer and an installed on-device speech recognizer.');
+        throw new Error('Recorded transcription needs Whisper or Android 13 or newer with an installed on-device speech recognizer. See Settings → Dictation.');
       }
       if (!(await AudioModule.requestRecordingPermissionsAsync()).granted ||
           !(await requestSpeechRecognitionPermission(language))) {

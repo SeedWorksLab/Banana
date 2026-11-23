@@ -1,6 +1,6 @@
-import React, { useRef, useState } from 'react';
-import { ScrollView, type StyleProp, type ViewStyle } from 'react-native';
-import { TextInput } from 'react-native-paper';
+import React from 'react';
+import { View, type StyleProp, type ViewStyle } from 'react-native';
+import { Text, TextInput } from 'react-native-paper';
 import { useAppTheme } from '../theme';
 
 type ScrollableTextInputProps = Omit<React.ComponentProps<typeof TextInput>, 'style'> & {
@@ -8,26 +8,25 @@ type ScrollableTextInputProps = Omit<React.ComponentProps<typeof TextInput>, 'st
 };
 
 export function ScrollableTextInput({
-  style, onContentSizeChange, accessibilityLabel, label, ...props
+  style, accessibilityLabel, label, ...props
 }: ScrollableTextInputProps) {
   const theme = useAppTheme();
-  const minimumHeight = theme.spacing[10] * 2;
-  const [contentHeight, setContentHeight] = useState(minimumHeight);
-  const scroll = useRef<ScrollView>(null);
-  return <ScrollView ref={scroll} style={[style, { height: minimumHeight, flexGrow: 0 }]}
-    showsVerticalScrollIndicator persistentScrollbar keyboardShouldPersistTaps="handled"
-    nestedScrollEnabled testID="scrollable-text-input">
-    <TextInput {...props} label={label} multiline scrollEnabled={false}
-      accessibilityLabel={accessibilityLabel ?? (typeof label === 'string' ? label : undefined)}
-      style={{ height: contentHeight }}
-      onContentSizeChange={(event) => {
-        setContentHeight(Math.max(minimumHeight, event.nativeEvent.contentSize.height + theme.spacing[8]));
-        onContentSizeChange?.(event);
-      }}
-      onSelectionChange={(event) => {
-        if (event.nativeEvent.selection.end === props.value?.length) scroll.current?.scrollToEnd({ animated: false });
-        props.onSelectionChange?.(event);
-      }}
-    />
-  </ScrollView>;
+  const height = theme.spacing[10] * 2;
+  return (
+    <View style={[style, { flexGrow: 0, gap: theme.spacing[2] }]}>
+      {label ? <Text variant="labelLarge" testID="scrollable-text-input-label"
+        style={{ color: props.error ? theme.colors.error : theme.colors.onSurfaceVariant }}>
+        {label}
+      </Text> : null}
+      <View testID="scrollable-text-input" style={{
+        height, flexGrow: 0, overflow: 'hidden', borderRadius: theme.radii.medium,
+      }}>
+        <TextInput {...props} multiline scrollEnabled textAlignVertical="top"
+          accessibilityLabel={accessibilityLabel ?? (typeof label === 'string' ? label : undefined)}
+          style={{ height }}
+          contentStyle={[{ paddingVertical: theme.spacing[3] }, props.contentStyle]}
+        />
+      </View>
+    </View>
+  );
 }
